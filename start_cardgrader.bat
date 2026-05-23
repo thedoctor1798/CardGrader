@@ -1,17 +1,27 @@
 @echo off
-cd /d %~dp0backend
+setlocal
 
-if not exist ".venv\Scripts\python.exe" (
-	echo Creating virtual environment...
-	python -m venv .venv
+cd /d %~dp0
+
+if not exist "backend\.venv\Scripts\python.exe" (
+    echo Creating backend virtual environment...
+    python -m venv backend\.venv
 )
 
-call .venv\Scripts\activate.bat
+call backend\.venv\Scripts\activate.bat
 
-echo Installing/updating requirements...
-python -m pip install -r requirements.txt
+echo Installing/updating backend requirements...
+python -m pip install -r backend\requirements.txt
 
-echo Starting CardGrader on http://localhost:8710
+echo.
+echo Backend: http://127.0.0.1:8710
+echo Health:  http://127.0.0.1:8710/api/health
+echo.
+echo Frontend dev server must be started separately:
+echo cd frontend ^&^& npm run dev
+echo.
+
+cd backend
 python -m uvicorn app.main:app --host 127.0.0.1 --port 8710 --reload
 
 pause

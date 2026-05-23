@@ -12,6 +12,8 @@ app.add_middleware(
     allow_origins=[
         "http://127.0.0.1:5173",
         "http://localhost:5173",
+        "http://127.0.0.1:5174",
+        "http://localhost:5174",
         "http://127.0.0.1:8710",
         "http://localhost:8710",
     ],
@@ -28,6 +30,29 @@ app.include_router(health.router, prefix="/api")
 app.include_router(media.router)
 app.include_router(owned_cards.router, prefix="/api")
 app.include_router(prices.router, prefix="/api")
+
+
+@app.get("/")
+def root():
+    return {
+        "app": "CardGrader AI Local Edition",
+        "status": "ok",
+        "mode": "local-only",
+        "api_health": "/api/health",
+        "frontend": "http://127.0.0.1:5173",
+    }
+
+
+@app.get("/api/app/info")
+def app_info():
+    return {
+        "name": "CardGrader AI Local Edition",
+        "mode": "local-only",
+        "external_apis_enabled": False,
+        "local_ai_enabled": False,
+        "database": "sqlite",
+        "media_storage": "local",
+    }
 
 
 @app.on_event("startup")

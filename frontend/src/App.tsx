@@ -1,9 +1,9 @@
 import { useEffect, useState } from "react";
-import { EmptyState } from "./components/EmptyState";
 import { Layout } from "./components/Layout";
 import { CardDetailPage } from "./pages/CardDetailPage";
 import { CollectionPage } from "./pages/CollectionPage";
 import { DashboardPage } from "./pages/DashboardPage";
+import { SettingsPage } from "./pages/SettingsPage";
 
 export type Page = "dashboard" | "collection" | "detail" | "settings";
 
@@ -49,7 +49,7 @@ export default function App() {
       {page === "dashboard" && <DashboardPage />}
       {page === "collection" && <CollectionPage onOpenOwnedCard={openOwnedCard} />}
       {page === "detail" && ownedCardId !== null && <CardDetailPage ownedCardId={ownedCardId} />}
-      {page === "settings" && <EmptyState label="Beállítások placeholder. A lokális mód és API tiltások jelenleg fixek." />}
+      {page === "settings" && <SettingsPage />}
     </Layout>
   );
 }

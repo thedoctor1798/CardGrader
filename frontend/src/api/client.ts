@@ -1,12 +1,16 @@
 import type {
   AnalysisReport,
   AnalysisRun,
+  AppInfo,
   Card,
   CardMedia,
+  CleanupGeneratedMediaResponse,
   CollectionSnapshot,
   CollectionSummary,
+  DemoSeedResponse,
   OwnedCard,
   PriceObservation,
+  ResetLocalDataResponse,
 } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8710";
@@ -43,13 +47,16 @@ export function mediaUrl(filePath?: string | null): string {
 }
 
 export const api = {
+  getAppInfo: () => request<AppInfo>("/api/app/info"),
   getCollectionSummary: () => request<CollectionSummary>("/api/collection/summary"),
   getCollectionSnapshots: () => request<CollectionSnapshot[]>("/api/collection/snapshots"),
   createCollectionSnapshot: () => request<CollectionSnapshot>("/api/collection/snapshot", { method: "POST" }),
   getOwnedCards: () => request<OwnedCard[]>("/api/owned-cards"),
   getOwnedCard: (id: number) => request<OwnedCard>(`/api/owned-cards/${id}`),
   getCard: (id: number) => request<Card>(`/api/cards/${id}`),
-  seedRowlet: () => request<{ card: Card; owned_card: OwnedCard; created: boolean }>("/api/demo/seed-rowlet", { method: "POST" }),
+  seedRowlet: () => request<DemoSeedResponse>("/api/demo/seed-rowlet", { method: "POST" }),
+  resetLocalData: () => request<ResetLocalDataResponse>("/api/demo/reset-local-data", { method: "POST" }),
+  cleanupGeneratedMedia: () => request<CleanupGeneratedMediaResponse>("/api/demo/cleanup-generated-media", { method: "POST" }),
   getOwnedCardMedia: (id: number) => request<CardMedia[]>(`/api/owned-cards/${id}/media`),
   uploadMedia: (ownedCardId: number, label: string, file: File) => {
     const body = new FormData();

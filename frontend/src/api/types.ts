@@ -171,3 +171,34 @@ export type AnalysisReport = {
 export type OwnedCardWithCard = OwnedCard & {
   card?: Card | null;
 };
+
+export type AppInfo = {
+  name: string;
+  mode: string;
+  external_apis_enabled: boolean;
+  local_ai_enabled: boolean;
+  database: string;
+  media_storage: string;
+};
+
+export type DemoSeedResponse = {
+  card: Card;
+  owned_card: OwnedCard;
+  created?: boolean;
+  created_card: boolean;
+  created_owned_card: boolean;
+  message: string;
+};
+
+export type ResetLocalDataResponse = {
+  status: string;
+  message: string;
+  deleted: Record<string, number>;
+};
+
+export type CleanupGeneratedMediaResponse = {
+  status: string;
+  message: string;
+  deleted_files: number;
+  deleted: Record<string, number>;
+};

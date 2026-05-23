@@ -1,26 +1,42 @@
-# CardGrader AI Local Edition — Backend
+# CardGrader AI Local Edition
 
-This repository contains the local-only backend skeleton for CardGrader AI Local Edition.
+Local-only card collection, pricing, OpenCV preprocessing, and grading precheck MVP.
 
-Quick start (Windows):
+All data is local. No external AI API or cloud service is used.
 
-1. Create a Python 3.12 venv and activate it.
+## Local Workflow
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-pip install -r backend\requirements.txt
-```
-
-2. Start the app:
+### Start Backend
 
 ```powershell
 .\start_cardgrader.bat
 ```
 
-The backend will run on http://localhost:8710 and expose a health endpoint at `/api/health`.
+Backend URLs:
 
-Frontend quick start:
+- Backend: http://127.0.0.1:8710
+- Health: http://127.0.0.1:8710/api/health
+- App info: http://127.0.0.1:8710/api/app/info
+
+### Start Frontend
+
+```powershell
+.\start_frontend.bat
+```
+
+Frontend URL:
+
+- http://127.0.0.1:5173
+
+The Vite dev server is configured with `strictPort: true`, so it should fail clearly if port 5173 is already in use instead of silently switching ports.
+
+You can also start both dev servers:
+
+```powershell
+.\start_all_dev.bat
+```
+
+### Manual Frontend Start
 
 ```powershell
 cd frontend
@@ -29,65 +45,136 @@ $env:VITE_API_BASE_URL="http://127.0.0.1:8710"
 npm run dev
 ```
 
-The frontend will run on http://127.0.0.1:5173 and talks only to the local backend.
+## Health Check
 
-Notes:
+```powershell
+Invoke-RestMethod -Method Get -Uri http://127.0.0.1:8710/api/health
+```
+
+Opening http://127.0.0.1:8710 returns local app metadata.
+
+## Seed Rowlet Demo
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8710/api/demo/seed-rowlet
+```
+
+The Rowlet seed endpoint is idempotent. Repeated calls reuse the existing demo card and owned-card records.
+
+## Reset Local Data
+
+Warning: this deletes local SQLite demo data. It does not delete uploaded original media files.
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8710/api/demo/reset-local-data
+```
+
+Deleted tables:
+
+- analysis_assets
+- analysis_findings
+- analysis_runs
+- card_media
+- price_observations
+- collection_snapshots
+- owned_cards
+- cards
+
+## Cleanup Generated Media
+
+Warning: this deletes generated media only. It does not delete `media/originals`.
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8710/api/demo/cleanup-generated-media
+```
+
+Cleaned folders:
+
+- media/resized
+- media/crops
+- media/annotated
+- media/video_frames
+- media/reports
+
+## Snapshot Behavior
+
+Dashboard summary cards show live local SQLite data. The value chart only changes when you create a collection snapshot.
+
+Use the Dashboard button:
+
+```text
+Snapshot készítése
+```
+
+or call:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8710/api/collection/snapshot
+```
+
+## Media Upload Test
+
+1. Seed Rowlet:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8710/api/demo/seed-rowlet
+```
+
+2. Upload an image to an owned card ID:
+
+```powershell
+curl.exe -X POST http://127.0.0.1:8710/api/owned-cards/1/media `
+  -F "label=front" `
+  -F "file=@C:\path\to\rowlet-front.jpg"
+```
+
+3. List media:
+
+```powershell
+Invoke-RestMethod -Method Get -Uri http://127.0.0.1:8710/api/owned-cards/1/media
+```
+
+## OpenCV Analysis Test
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8710/api/owned-cards/1/analyze/opencv
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8710/api/analysis-runs/1/score
+Invoke-RestMethod -Method Get -Uri http://127.0.0.1:8710/api/analysis-runs/1/report
+```
+
+## Local Files
+
 - Database: `data/cardgrader.db`
-- Media folders are created under `media/` (`originals`, `resized`, `crops`, `annotated`, `video_frames`, `reports`).
-- No external AI or network calls are made by the MVP.
+- Media folders: `media/originals`, `media/resized`, `media/crops`, `media/annotated`, `media/video_frames`, `media/reports`
 
-Manual media upload test:
+Do not commit local database or media files.
 
-1. Seed the Rowlet demo row:
+## Troubleshooting
+
+### Frontend shows "Failed to fetch"
+
+Check that the backend is running:
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri http://localhost:8710/api/demo/seed-rowlet
+Invoke-RestMethod -Method Get -Uri http://127.0.0.1:8710/api/health
 ```
 
-2. Upload an image to the owned card ID returned by the seed response:
+If this fails, start the backend:
 
 ```powershell
-curl.exe -X POST http://localhost:8710/api/owned-cards/1/media `
-  -F "label=front" `
-  -F "file=@C:\path\to\rowlet-front.jpg"
+.\start_cardgrader.bat
 ```
 
-3. List media for that owned card:
+### Vite says port 5173 is in use
+
+Close the old frontend terminal, or stop local Node dev servers:
 
 ```powershell
-Invoke-RestMethod -Method Get -Uri http://localhost:8710/api/owned-cards/1/media
+taskkill /IM node.exe /F
 ```
 
-Manual OpenCV analysis test:
-
-1. Seed Rowlet if needed:
+Then start the frontend again:
 
 ```powershell
-Invoke-RestMethod -Method Post -Uri http://localhost:8710/api/demo/seed-rowlet
-```
-
-2. Upload a front image if needed:
-
-```powershell
-curl.exe -X POST http://localhost:8710/api/owned-cards/1/media `
-  -F "label=front" `
-  -F "file=@C:\path\to\rowlet-front.jpg"
-```
-
-3. Run local OpenCV analysis:
-
-```powershell
-Invoke-RestMethod -Method Post -Uri http://localhost:8710/api/owned-cards/1/analyze/opencv
-```
-
-4. Get an analysis run:
-
-```powershell
-Invoke-RestMethod -Method Get -Uri http://localhost:8710/api/analysis-runs/1
-```
-
-5. List analysis runs for an owned card:
-
-```powershell
-Invoke-RestMethod -Method Get -Uri http://localhost:8710/api/owned-cards/1/analysis-runs
+.\start_frontend.bat
 ```
