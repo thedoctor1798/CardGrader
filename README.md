@@ -146,12 +146,18 @@ Invoke-RestMethod -Method Get -Uri http://127.0.0.1:8710/api/analysis-runs/1/rep
 
 Local AI is optional and disabled by default. Only localhost model servers are allowed. No API key is used.
 
-Example with LM Studio:
+Detailed LM Studio workflow:
 
 1. Install and start LM Studio.
-2. Load a vision-capable local model.
+2. Download/load a vision-capable local model.
 3. Start the LM Studio local server.
-4. Set environment variables before starting the backend:
+4. Confirm the server URL is:
+
+```text
+http://127.0.0.1:1234/v1
+```
+
+5. Create/edit backend `.env` or set these environment variables before starting the backend:
 
 ```powershell
 $env:LOCAL_AI_ENABLED="true"
@@ -161,6 +167,12 @@ $env:LOCAL_AI_MODEL_NAME="<your-local-vision-model>"
 $env:LOCAL_AI_TIMEOUT_SECONDS="120"
 .\start_cardgrader.bat
 ```
+
+6. Restart the backend after changing Local AI settings.
+7. Open the Settings page.
+8. Click `Local AI kapcsolat tesztelése`.
+9. Run OpenCV analysis first.
+10. Run Local AI analysis from the Card Detail page.
 
 Allowed local base URLs:
 
@@ -173,11 +185,29 @@ Allowed local base URLs:
 
 Run OpenCV analysis first, then run Local AI analysis from the Card Detail page.
 
-Check status:
+Useful debug endpoints:
 
 ```powershell
 Invoke-RestMethod -Method Get -Uri http://127.0.0.1:8710/api/local-ai/status
+Invoke-RestMethod -Method Get -Uri http://127.0.0.1:8710/api/local-ai/config
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8710/api/local-ai/test-connection
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8710/api/owned-cards/1/analyze/local-ai-dry-run
 ```
+
+Local AI debug files are saved under:
+
+```text
+media/reports/{analysis_run_id}/local_ai_raw_response.txt
+media/reports/{analysis_run_id}/local_ai_parsed.json
+```
+
+Local AI troubleshooting:
+
+- If Local AI is disabled, check `.env` or environment variables and restart the backend.
+- If LM Studio is unreachable, check that the LM Studio local server is running.
+- If the model is missing, copy the exact model id/name from LM Studio or `/models`.
+- If JSON parsing fails, inspect `local_ai_raw_response.txt` under `media/reports`.
+- Only localhost model servers are allowed. Remote API hosts, LAN IPs, public IPs, and domain names are rejected.
 
 ## Local Files
 

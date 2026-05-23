@@ -9,6 +9,7 @@ import type {
   AnalysisRun,
   Card,
   CardMedia,
+  LocalAIDryRun,
   LocalAIStatus,
   OwnedCard,
   PriceObservation,
@@ -106,6 +107,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const [analysisRuns, setAnalysisRuns] = useState<AnalysisRun[]>([]);
   const [findings, setFindings] = useState<AnalysisFinding[]>([]);
   const [localAI, setLocalAI] = useState<LocalAIStatus | null>(null);
+  const [localAIDryRun, setLocalAIDryRun] = useState<LocalAIDryRun | null>(null);
   const [report, setReport] = useState<AnalysisReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
@@ -120,6 +122,16 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const latestAnalysis = analysisRuns[0] ?? null;
   const visibleFindings = report?.findings?.length ? report.findings : findings;
   const hasAnalysisImage = media.some((item) => item.media_type === "image" && (item.label === "front" || item.label === "back"));
+  const latestOpenCvAnalysis = analysisRuns.find((run) => run.mode === "local_only" && run.status === "completed") ?? null;
+  const localAIBlockedReason = !latestOpenCvAnalysis
+    ? "Elobb futtasd az OpenCV elemzest."
+    : !localAI?.enabled
+      ? "Local AI nincs bekapcsolva."
+      : !localAI.model_name
+        ? "LOCAL_AI_MODEL_NAME nincs beallitva."
+        : !localAI.reachable
+          ? "LM Studio nem erheto el."
+          : null;
 
   const loadReport = useCallback(async (analysisRunId: number | null) => {
     if (!analysisRunId) {
@@ -279,7 +291,9 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   };
 
   const runLocalAI = async () => {
-    if (!localAI?.enabled || !localAI.reachable) {
+    if (localAIBlockedReason) {
+      setError(localAIBlockedReason);
+      return;
       setError("Local AI nincs bekapcsolva. Állítsd be az LM Studio/Ollama lokális szervert.");
       return;
     }
@@ -294,6 +308,25 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Local AI elemzési hiba");
+    } finally {
+      setBusyLabel(null);
+    }
+  };
+
+  const runLocalAIDryRun = async () => {
+    if (!latestOpenCvAnalysis) {
+      setError("Elobb futtasd az OpenCV elemzest.");
+      return;
+    }
+    setBusyLabel("Local AI dry-run...");
+    setMessage(null);
+    try {
+      const result = await api.runLocalAIDryRun(ownedCardId);
+      setLocalAIDryRun(result);
+      setMessage(`Dry-run kesz. Kuldeni tervezett kepek: ${result.images_would_send}.`);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Local AI dry-run hiba");
     } finally {
       setBusyLabel(null);
     }
@@ -397,14 +430,18 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
 
         <div className="space-y-4">
           <Panel title="Képi elemzés" subtitle="OpenCV előfeldolgozás és localhost-only Local AI opcionális elemzés.">
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-3 md:grid-cols-3">
               <button className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-60" disabled={busy} onClick={runAnalysis} type="button">
                 <Play size={16} /> {busyLabel === "Elemzés fut..." ? "Elemzés fut..." : "OpenCV elemzés indítása"}
               </button>
-              <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-500/40 px-3 py-2 text-sm font-medium text-emerald-200 hover:bg-emerald-500/10 disabled:opacity-50" disabled={busy || !localAI?.enabled || !localAI.reachable} onClick={runLocalAI} type="button">
+              <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-500/40 px-3 py-2 text-sm font-medium text-emerald-200 hover:bg-emerald-500/10 disabled:opacity-50" disabled={busy || Boolean(localAIBlockedReason)} onClick={runLocalAI} type="button">
                 <Play size={16} /> Local AI elemzés indítása
               </button>
+              <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-600 px-3 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800/50 disabled:opacity-50" disabled={busy || !latestOpenCvAnalysis} onClick={runLocalAIDryRun} type="button">
+                Local AI dry-run
+              </button>
             </div>
+            {localAIBlockedReason && <p className="mt-3 text-sm text-amber-200">{localAIBlockedReason}</p>}
             {!localAI?.enabled && <p className="mt-3 text-sm text-amber-200">Local AI nincs bekapcsolva. Állítsd be az LM Studio/Ollama lokális szervert.</p>}
             {localAI?.enabled && !localAI.reachable && <p className="mt-3 text-sm text-amber-200">{localAI.message}</p>}
             {latestAnalysis && (
@@ -413,6 +450,21 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                 <StatCard label="Centering" value={formatNumber(latestAnalysis.centering_score)} />
                 <StatCard label="Confidence" value={latestAnalysis.confidence_level ?? "-"} />
                 <StatCard label="Version" value={latestAnalysis.analysis_version ?? "-"} />
+              </div>
+            )}
+            {localAIDryRun && (
+              <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-sm text-slate-300">
+                <div className="font-medium text-slate-100">Local AI dry-run</div>
+                <div className="mt-1">Images: {localAIDryRun.images_would_send}</div>
+                <div className="mt-2 flex flex-wrap gap-2">
+                  {localAIDryRun.image_labels_would_send.map((label) => (
+                    <span key={label} className="rounded-full border border-slate-700 px-2 py-0.5 text-xs text-slate-300">{label}</span>
+                  ))}
+                </div>
+                <details className="mt-3">
+                  <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-500">Prompt preview</summary>
+                  <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded bg-slate-950 p-3 text-xs text-slate-300">{localAIDryRun.prompt_preview}</pre>
+                </details>
               </div>
             )}
           </Panel>

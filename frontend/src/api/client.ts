@@ -12,6 +12,9 @@ import type {
   DemoSeedResponse,
   LocalAIStatus,
   LocalAIAnalysisResponse,
+  LocalAIConfig,
+  LocalAIDryRun,
+  LocalAITestConnection,
   OwnedCard,
   PriceObservation,
   ResetLocalDataResponse,
@@ -53,6 +56,8 @@ export function mediaUrl(filePath?: string | null): string {
 export const api = {
   getAppInfo: () => request<AppInfo>("/api/app/info"),
   getLocalAIStatus: () => request<LocalAIStatus>("/api/local-ai/status"),
+  getLocalAIConfig: () => request<LocalAIConfig>("/api/local-ai/config"),
+  testLocalAIConnection: () => request<LocalAITestConnection>("/api/local-ai/test-connection", { method: "POST" }),
   getCollectionSummary: () => request<CollectionSummary>("/api/collection/summary"),
   getCollectionSnapshots: () => request<CollectionSnapshot[]>("/api/collection/snapshots"),
   createCollectionSnapshot: () => request<CollectionSnapshot>("/api/collection/snapshot", { method: "POST" }),
@@ -80,6 +85,8 @@ export const api = {
     request<AnalysisRun>(`/api/owned-cards/${ownedCardId}/analyze/opencv`, { method: "POST" }),
   runLocalAIFastAnalysis: (ownedCardId: number) =>
     request<LocalAIAnalysisResponse>(`/api/owned-cards/${ownedCardId}/analyze/local-ai-fast`, { method: "POST" }),
+  runLocalAIDryRun: (ownedCardId: number) =>
+    request<LocalAIDryRun>(`/api/owned-cards/${ownedCardId}/analyze/local-ai-dry-run`, { method: "POST" }),
   scoreAnalysisRun: (analysisRunId: number) =>
     request<AnalysisRun>(`/api/analysis-runs/${analysisRunId}/score`, { method: "POST" }),
   annotateAnalysisRun: (analysisRunId: number) =>

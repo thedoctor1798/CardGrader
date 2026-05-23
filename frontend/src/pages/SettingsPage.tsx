@@ -1,7 +1,7 @@
 import { RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
-import type { AppInfo, LocalAIStatus } from "../api/types";
+import type { AppInfo, LocalAIConfig, LocalAIStatus, LocalAITestConnection } from "../api/types";
 import { EmptyState } from "../components/EmptyState";
 import { LoadingState } from "../components/LoadingState";
 import { Panel } from "../components/Panel";
@@ -10,6 +10,8 @@ import { StatCard } from "../components/StatCard";
 export function SettingsPage() {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [localAI, setLocalAI] = useState<LocalAIStatus | null>(null);
+  const [localAIConfig, setLocalAIConfig] = useState<LocalAIConfig | null>(null);
+  const [connectionTest, setConnectionTest] = useState<LocalAITestConnection | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -18,9 +20,14 @@ export function SettingsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [info, aiStatus] = await Promise.all([api.getAppInfo(), api.getLocalAIStatus()]);
+      const [info, aiStatus, aiConfig] = await Promise.all([
+        api.getAppInfo(),
+        api.getLocalAIStatus(),
+        api.getLocalAIConfig(),
+      ]);
       setAppInfo(info);
       setLocalAI(aiStatus);
+      setLocalAIConfig(aiConfig);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Nem sikerült betölteni az app infót.");
@@ -32,6 +39,21 @@ export function SettingsPage() {
   useEffect(() => {
     load();
   }, [load]);
+
+  const testLocalAIConnection = async () => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const result = await api.testLocalAIConnection();
+      setConnectionTest(result);
+      setMessage(result.message);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Local AI kapcsolat teszt hiba.");
+    } finally {
+      setBusy(false);
+    }
+  };
 
   const resetLocalData = async () => {
     if (!window.confirm("Biztosan törlöd a lokális teszt adatokat?")) return;
@@ -96,11 +118,44 @@ export function SettingsPage() {
             <StatCard label="Provider" value={localAI.provider} />
             <StatCard label="Base URL" value={localAI.base_url} />
             <StatCard label="Model" value={localAI.model_name || "-"} />
+            <StatCard label="Timeout" value={`${localAIConfig?.timeout_seconds ?? "-"}s`} />
             <StatCard label="Localhost" value={localAI.is_localhost ? "igen" : "nem"} tone={localAI.is_localhost ? "good" : "bad"} />
             <StatCard label="Reachable" value={localAI.reachable ? "igen" : "nem"} tone={localAI.reachable ? "good" : "warn"} />
             <StatCard label="Vision" value={localAI.vision_capable} />
           </div>
           <p className="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-sm text-slate-300">{localAI.message}</p>
+          <p className="mt-3 text-sm text-slate-400">Az értékeket jelenleg .env fájlban kell beállítani, majd a backendet újraindítani.</p>
+          <div className="mt-4 flex flex-wrap gap-3">
+            <button
+              className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/10 px-4 py-2 text-sm font-medium text-blue-100 hover:bg-blue-500/20 disabled:opacity-60"
+              disabled={busy}
+              onClick={testLocalAIConnection}
+              type="button"
+            >
+              <RefreshCw size={16} />
+              Local AI kapcsolat tesztelése
+            </button>
+            <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-300 opacity-60" disabled type="button">
+              Konfiguráció frissítése
+            </button>
+          </div>
+          {connectionTest && (
+            <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-sm text-slate-300">
+              <div className="font-medium text-slate-100">Kapcsolat teszt: {connectionTest.ok ? "OK" : "nem OK"}</div>
+              <div className="mt-1">Reachable: {connectionTest.reachable ? "igen" : "nem"}</div>
+              <div className="mt-1">{connectionTest.message}</div>
+              <div className="mt-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Modellek</div>
+              {connectionTest.models.length === 0 ? (
+                <div className="mt-1 text-slate-500">Nincs modell lista.</div>
+              ) : (
+                <ul className="mt-2 max-h-40 space-y-1 overflow-auto">
+                  {connectionTest.models.map((model) => (
+                    <li key={model} className="rounded bg-slate-900 px-2 py-1">{model}</li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
         </Panel>
       )}
 

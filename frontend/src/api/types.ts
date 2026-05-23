@@ -236,10 +236,36 @@ export type LocalAIStatus = {
   message: string;
 };
 
+export type LocalAIConfig = {
+  enabled: boolean;
+  provider: string;
+  base_url: string;
+  model_name?: string | null;
+  timeout_seconds: number;
+  is_localhost: boolean;
+};
+
+export type LocalAITestConnection = {
+  ok: boolean;
+  reachable: boolean;
+  models: string[];
+  message: string;
+};
+
 export type LocalAIAnalysisResponse = {
   analysis_run: AnalysisRun;
   finding_count: number;
+  images_sent?: number;
+  image_labels_sent?: string[];
   status: string;
+};
+
+export type LocalAIDryRun = {
+  config: LocalAIConfig;
+  opencv_analysis_run_id: number;
+  images_would_send: number;
+  image_labels_would_send: string[];
+  prompt_preview: string;
 };
 
 export type AnnotationResponse = {
