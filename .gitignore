@@ -1,0 +1,40 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+backend/.venv/
+.venv/
+
+# Env
+.env
+.env.local
+
+# Local database / data
+data/*.db
+data/backups/
+data/exports/
+
+# Media uploads
+media/originals/
+media/resized/
+media/crops/
+media/annotated/
+media/video_frames/
+media/reports/
+
+# Logs
+logs/
+*.log
+
+# Frontend
+node_modules/
+frontend/node_modules/
+frontend/dist/
+
+# VS Code
+.vscode/
+
+# OS
+.DS_Store
+Thumbs.db
