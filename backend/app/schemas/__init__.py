@@ -1,4 +1,10 @@
 """Schemas package - placeholder for Pydantic/SQLModel schemas."""
+from .analysis import (
+    AnalysisAssetRead,
+    AnalysisFindingRead,
+    AnalysisRunDetailRead,
+    AnalysisRunRead,
+)
 from .cards import CardCreate, CardMediaRead, CardRead, OwnedCardCreate, OwnedCardRead
 from .prices import (
     CollectionSnapshotRead,
@@ -9,6 +15,10 @@ from .prices import (
 )
 
 __all__ = [
+    "AnalysisAssetRead",
+    "AnalysisFindingRead",
+    "AnalysisRunDetailRead",
+    "AnalysisRunRead",
     "CardCreate",
     "CardMediaRead",
     "CardRead",

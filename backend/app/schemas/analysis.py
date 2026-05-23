@@ -1,0 +1,67 @@
+from datetime import datetime
+from typing import Optional
+
+from sqlmodel import SQLModel
+
+
+class AnalysisRunRead(SQLModel):
+    id: int
+    owned_card_id: int
+    mode: Optional[str] = None
+    status: Optional[str] = None
+    model_provider: Optional[str] = None
+    model_name: Optional[str] = None
+    prompt_version: Optional[str] = None
+    opencv_version: Optional[str] = None
+    analysis_version: Optional[str] = None
+    centering_score: Optional[float] = None
+    corners_score: Optional[float] = None
+    edges_score: Optional[float] = None
+    surface_score: Optional[float] = None
+    overall_score: Optional[float] = None
+    estimated_grade_low: Optional[float] = None
+    estimated_grade_high: Optional[float] = None
+    psa_10_probability: Optional[float] = None
+    psa_9_probability: Optional[float] = None
+    psa_8_probability: Optional[float] = None
+    psa_7_or_lower_probability: Optional[float] = None
+    confidence_level: Optional[str] = None
+    human_summary: Optional[str] = None
+    recommendation: Optional[str] = None
+    recommendation_reason: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: datetime
+    completed_at: Optional[datetime] = None
+
+
+class AnalysisFindingRead(SQLModel):
+    id: int
+    analysis_run_id: int
+    media_id: Optional[int] = None
+    finding_type: Optional[str] = None
+    severity: Optional[str] = None
+    confidence: Optional[float] = None
+    location_label: Optional[str] = None
+    bbox_x: Optional[float] = None
+    bbox_y: Optional[float] = None
+    bbox_width: Optional[float] = None
+    bbox_height: Optional[float] = None
+    title: Optional[str] = None
+    description: Optional[str] = None
+    grade_impact: Optional[float] = None
+    created_at: datetime
+
+
+class AnalysisAssetRead(SQLModel):
+    id: int
+    analysis_run_id: int
+    asset_type: Optional[str] = None
+    file_path: str
+    label: Optional[str] = None
+    created_at: datetime
+
+
+class AnalysisRunDetailRead(SQLModel):
+    analysis_run: AnalysisRunRead
+    findings: list[AnalysisFindingRead]
+    assets: list[AnalysisAssetRead]

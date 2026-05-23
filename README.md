@@ -46,3 +46,37 @@ curl.exe -X POST http://localhost:8710/api/owned-cards/1/media `
 ```powershell
 Invoke-RestMethod -Method Get -Uri http://localhost:8710/api/owned-cards/1/media
 ```
+
+Manual OpenCV analysis test:
+
+1. Seed Rowlet if needed:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:8710/api/demo/seed-rowlet
+```
+
+2. Upload a front image if needed:
+
+```powershell
+curl.exe -X POST http://localhost:8710/api/owned-cards/1/media `
+  -F "label=front" `
+  -F "file=@C:\path\to\rowlet-front.jpg"
+```
+
+3. Run local OpenCV analysis:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:8710/api/owned-cards/1/analyze/opencv
+```
+
+4. Get an analysis run:
+
+```powershell
+Invoke-RestMethod -Method Get -Uri http://localhost:8710/api/analysis-runs/1
+```
+
+5. List analysis runs for an owned card:
+
+```powershell
+Invoke-RestMethod -Method Get -Uri http://localhost:8710/api/owned-cards/1/analysis-runs
+```

@@ -1,11 +1,12 @@
 from fastapi import FastAPI
-from .routers import cards, collection, demo, health, media, owned_cards, prices
+from .routers import analysis, cards, collection, demo, health, media, owned_cards, prices
 from .database import init_db
 from .utils.files import ensure_media_dirs
 from .config import HOST, PORT
 
 app = FastAPI(title="CardGrader AI Local Edition")
 
+app.include_router(analysis.router, prefix="/api")
 app.include_router(cards.router, prefix="/api")
 app.include_router(collection.router, prefix="/api")
 app.include_router(demo.router, prefix="/api")
