@@ -63,11 +63,11 @@ class PriceObservation(SQLModel, table=True):
     owned_card_id: Optional[int] = Field(default=None, foreign_key="owned_cards.id")
     source_name: Optional[str] = None
     currency: Optional[str] = None
-    raw_price_huf: Optional[int] = None
-    psa_7_price_huf: Optional[int] = None
-    psa_8_price_huf: Optional[int] = None
-    psa_9_price_huf: Optional[int] = None
-    psa_10_price_huf: Optional[int] = None
+    raw_price_huf: Optional[float] = None
+    psa_7_price_huf: Optional[float] = None
+    psa_8_price_huf: Optional[float] = None
+    psa_9_price_huf: Optional[float] = None
+    psa_10_price_huf: Optional[float] = None
     price_confidence: Optional[float] = None
     observed_at: datetime = Field(default_factory=utc_now)
     notes: Optional[str] = None
@@ -145,10 +145,10 @@ class CollectionSnapshot(SQLModel, table=True):
     unique_cards: Optional[int] = None
     raw_cards: Optional[int] = None
     graded_cards: Optional[int] = None
-    collection_value_huf: Optional[int] = None
-    cost_basis_huf: Optional[int] = None
-    unrealized_profit_huf: Optional[int] = None
-    conservative_value_huf: Optional[int] = None
-    expected_value_huf: Optional[int] = None
-    optimistic_value_huf: Optional[int] = None
+    collection_value_huf: Optional[float] = None
+    cost_basis_huf: Optional[float] = None
+    unrealized_profit_huf: Optional[float] = None
+    conservative_value_huf: Optional[float] = None
+    expected_value_huf: Optional[float] = None
+    optimistic_value_huf: Optional[float] = None
     created_at: datetime = Field(default_factory=utc_now)
