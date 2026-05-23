@@ -2,6 +2,7 @@ import type {
   AnalysisReport,
   AnalysisRun,
   AnalysisFinding,
+  AnnotationResponse,
   AppInfo,
   Card,
   CardMedia,
@@ -10,6 +11,7 @@ import type {
   CollectionSummary,
   DemoSeedResponse,
   LocalAIStatus,
+  LocalAIAnalysisResponse,
   OwnedCard,
   PriceObservation,
   ResetLocalDataResponse,
@@ -77,9 +79,11 @@ export const api = {
   runOpenCvAnalysis: (ownedCardId: number) =>
     request<AnalysisRun>(`/api/owned-cards/${ownedCardId}/analyze/opencv`, { method: "POST" }),
   runLocalAIFastAnalysis: (ownedCardId: number) =>
-    request<AnalysisRun>(`/api/owned-cards/${ownedCardId}/analyze/local-ai-fast`, { method: "POST" }),
+    request<LocalAIAnalysisResponse>(`/api/owned-cards/${ownedCardId}/analyze/local-ai-fast`, { method: "POST" }),
   scoreAnalysisRun: (analysisRunId: number) =>
     request<AnalysisRun>(`/api/analysis-runs/${analysisRunId}/score`, { method: "POST" }),
+  annotateAnalysisRun: (analysisRunId: number) =>
+    request<AnnotationResponse>(`/api/analysis-runs/${analysisRunId}/annotate`, { method: "POST" }),
   getAnalysisReport: (analysisRunId: number) => request<AnalysisReport>(`/api/analysis-runs/${analysisRunId}/report`),
   getAnalysisFindings: (analysisRunId: number) => request<AnalysisFinding[]>(`/api/analysis-runs/${analysisRunId}/findings`),
 };

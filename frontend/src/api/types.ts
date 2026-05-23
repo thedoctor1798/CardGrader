@@ -184,6 +184,10 @@ export type AnalysisReport = {
   latest_price?: PriceObservation | null;
   opportunity_precheck?: OpportunityPrecheck | null;
   assets: AnalysisAsset[];
+  findings: AnalysisFinding[];
+  strengths: string[];
+  main_grade_limiters: string[];
+  manual_review_recommendations: string[];
 };
 
 export type OwnedCardWithCard = OwnedCard & {
@@ -230,4 +234,15 @@ export type LocalAIStatus = {
   reachable: boolean;
   vision_capable: string;
   message: string;
+};
+
+export type LocalAIAnalysisResponse = {
+  analysis_run: AnalysisRun;
+  finding_count: number;
+  status: string;
+};
+
+export type AnnotationResponse = {
+  message: string;
+  assets: AnalysisAsset[];
 };

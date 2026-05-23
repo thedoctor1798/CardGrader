@@ -1,9 +1,9 @@
 from fastapi import HTTPException
 from sqlmodel import Session, select
 
-from ..models import AnalysisAsset, AnalysisRun
+from ..models import AnalysisAsset, AnalysisFinding, AnalysisRun
 from .pricing import get_latest_price_for_card
-from .scoring import get_owned_card_and_card, load_opportunity
+from .scoring import get_owned_card_and_card, is_confirmed_grade_limiter, load_opportunity, main_grade_limiter
 
 
 def build_analysis_report(session: Session, analysis_run_id: int) -> dict:
@@ -19,6 +19,40 @@ def build_analysis_report(session: Session, analysis_run_id: int) -> dict:
         .where(AnalysisAsset.analysis_run_id == analysis_run_id)
         .order_by(AnalysisAsset.created_at, AnalysisAsset.id)
     ).all()
+    findings = session.exec(
+        select(AnalysisFinding)
+        .where(AnalysisFinding.analysis_run_id == analysis_run_id)
+        .order_by(AnalysisFinding.created_at, AnalysisFinding.id)
+    ).all()
+    limiter = main_grade_limiter(findings)
+    confirmed_findings = [finding for finding in findings if is_confirmed_grade_limiter(finding)]
+    uncertain_findings = [
+        finding
+        for finding in findings
+        if (finding.finding_type or "").lower() in {"glare_uncertain", "image_quality_issue"}
+    ]
+    strengths = []
+    if not confirmed_findings:
+        strengths.append("A lokális AI nem jelölt egyértelmű, megerősített sérülést.")
+    if analysis_run.centering_score is not None and analysis_run.centering_score >= 8.5:
+        strengths.append("A centering MVP pontszám erős előszűrési értéket mutat.")
+    main_grade_limiters = [
+        f"{finding.title or finding.finding_type or 'Finding'} ({finding.severity or 'unknown'}, {finding.location_label or 'ismeretlen hely'})"
+        for finding in confirmed_findings[:5]
+    ]
+    if not main_grade_limiters and uncertain_findings:
+        main_grade_limiters.append("Bizonytalan glare/képminőség jelzés, jobb fotóval ellenőrizendő.")
+    if limiter is not None and main_grade_limiters:
+        main_grade_limiters[0] = (
+            f"Fő limiter: {limiter.title or limiter.finding_type or 'finding'} "
+            f"({limiter.severity or 'unknown'}, {limiter.location_label or 'ismeretlen hely'})"
+        )
+    manual_review_recommendations = [
+        "Ellenőrizd kézzel a sarok- és élkivágásokat nagyítva.",
+        "A surface hibákat döntött fényben készített fotóval érdemes újranézni.",
+    ]
+    if uncertain_findings:
+        manual_review_recommendations.append("A bizonytalan glare jelzésekhez készíts új képet egyenletesebb megvilágítással.")
 
     return {
         "card": card,
@@ -47,4 +81,8 @@ def build_analysis_report(session: Session, analysis_run_id: int) -> dict:
         "latest_price": latest_price,
         "opportunity_precheck": opportunity,
         "assets": assets,
+        "findings": findings,
+        "strengths": strengths,
+        "main_grade_limiters": main_grade_limiters,
+        "manual_review_recommendations": manual_review_recommendations,
     }

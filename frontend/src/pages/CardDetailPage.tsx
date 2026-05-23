@@ -1,7 +1,18 @@
 import { Play, RefreshCw, Upload, X } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
+import type { ReactNode } from "react";
 import { api, mediaUrl } from "../api/client";
-import type { AnalysisAsset, AnalysisFinding, AnalysisReport, AnalysisRun, Card, CardMedia, LocalAIStatus, OwnedCard, PriceObservation } from "../api/types";
+import type {
+  AnalysisAsset,
+  AnalysisFinding,
+  AnalysisReport,
+  AnalysisRun,
+  Card,
+  CardMedia,
+  LocalAIStatus,
+  OwnedCard,
+  PriceObservation,
+} from "../api/types";
 import { EmptyState } from "../components/EmptyState";
 import { LoadingState } from "../components/LoadingState";
 import { Panel } from "../components/Panel";
@@ -62,13 +73,29 @@ function optionalNumber(value: string): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
-function FieldLabel({ label, children }: { label: string; children: React.ReactNode }) {
+function FieldLabel({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="space-y-1.5 text-xs font-medium text-slate-400">
       <span>{label}</span>
       {children}
     </label>
   );
+}
+
+function FindingBadge({ children, tone = "default" }: { children: ReactNode; tone?: "default" | "warn" | "danger" }) {
+  const toneClass =
+    tone === "danger"
+      ? "border-rose-500/30 bg-rose-500/10 text-rose-200"
+      : tone === "warn"
+        ? "border-amber-500/30 bg-amber-500/10 text-amber-200"
+        : "border-slate-700 bg-slate-900 text-slate-300";
+  return <span className={`rounded-full border px-2 py-0.5 text-[11px] ${toneClass}`}>{children}</span>;
+}
+
+function severityTone(severity?: string | null): "default" | "warn" | "danger" {
+  if (severity === "severe" || severity === "moderate") return "danger";
+  if (severity === "minor" || severity === "very_minor") return "warn";
+  return "default";
 }
 
 export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
@@ -91,17 +118,22 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
 
   const busy = busyLabel !== null;
   const latestAnalysis = analysisRuns[0] ?? null;
+  const visibleFindings = report?.findings?.length ? report.findings : findings;
   const hasAnalysisImage = media.some((item) => item.media_type === "image" && (item.label === "front" || item.label === "back"));
 
   const loadReport = useCallback(async (analysisRunId: number | null) => {
     if (!analysisRunId) {
       setReport(null);
+      setFindings([]);
       return;
     }
     try {
-      setReport(await api.getAnalysisReport(analysisRunId));
+      const nextReport = await api.getAnalysisReport(analysisRunId);
+      setReport(nextReport);
+      setFindings(nextReport.findings ?? []);
     } catch {
       setReport(null);
+      setFindings([]);
     }
   }, []);
 
@@ -110,7 +142,6 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
     try {
       const owned = await api.getOwnedCard(ownedCardId);
       setOwnedCard(owned);
-
       const [cardData, mediaData, runsData] = await Promise.all([
         api.getCard(owned.card_id),
         api.getOwnedCardMedia(ownedCardId),
@@ -129,13 +160,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
         setPriceForm(emptyPriceForm);
       }
 
-      const latestRunId = runsData[0]?.id ?? null;
-      await loadReport(latestRunId);
-      if (latestRunId) {
-        setFindings(await api.getAnalysisFindings(latestRunId));
-      } else {
-        setFindings([]);
-      }
+      await loadReport(runsData[0]?.id ?? null);
       try {
         setLocalAI(await api.getLocalAIStatus());
       } catch {
@@ -164,6 +189,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
       resized: assets.filter((asset) => asset.asset_type === "resized_image"),
       corners: assets.filter((asset) => asset.label?.includes("corner")),
       edges: assets.filter((asset) => asset.label?.includes("edge")),
+      annotated: assets.filter((asset) => asset.asset_type === "annotated_image"),
     };
   }, [report]);
 
@@ -202,9 +228,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
       });
       setLatestPrice(saved);
       setPriceForm(formFromPrice(saved));
-      if (latestAnalysis) {
-        await loadReport(latestAnalysis.id);
-      }
+      if (latestAnalysis) await loadReport(latestAnalysis.id);
       setMessage("Ár mentve.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ár mentési hiba");
@@ -227,7 +251,6 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
       const runsData = await api.getAnalysisRuns(ownedCardId);
       setAnalysisRuns(runsData);
       await loadReport(newRun.id);
-      setFindings(await api.getAnalysisFindings(newRun.id));
       setMessage("OpenCV elemzés és score elkészült.");
       setError(null);
     } catch (err) {
@@ -243,10 +266,9 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
     setMessage(null);
     try {
       await api.scoreAnalysisRun(latestAnalysis.id);
-      await loadReport(latestAnalysis.id);
-      setFindings(await api.getAnalysisFindings(latestAnalysis.id));
       const runsData = await api.getAnalysisRuns(ownedCardId);
       setAnalysisRuns(runsData);
+      await loadReport(latestAnalysis.id);
       setMessage("Score/report frissítve.");
       setError(null);
     } catch (err) {
@@ -264,15 +286,30 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
     setBusyLabel("Local AI elemzés fut...");
     setMessage(null);
     try {
-      const aiRun = await api.runLocalAIFastAnalysis(ownedCardId);
+      const aiResult = await api.runLocalAIFastAnalysis(ownedCardId);
       const runsData = await api.getAnalysisRuns(ownedCardId);
       setAnalysisRuns(runsData);
-      await loadReport(aiRun.id);
-      setFindings(await api.getAnalysisFindings(aiRun.id));
-      setMessage("Local AI elemzés elkészült.");
+      await loadReport(aiResult.analysis_run.id);
+      setMessage(`Local AI elemzés elkészült. Findingok: ${aiResult.finding_count}.`);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Local AI elemzési hiba");
+    } finally {
+      setBusyLabel(null);
+    }
+  };
+
+  const generateAnnotations = async () => {
+    if (!latestAnalysis) return;
+    setBusyLabel("Annotációk generálása...");
+    setMessage(null);
+    try {
+      const result = await api.annotateAnalysisRun(latestAnalysis.id);
+      await loadReport(latestAnalysis.id);
+      setMessage(result.message);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Annotációs hiba");
     } finally {
       setBusyLabel(null);
     }
@@ -302,11 +339,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
           <Panel title="Kép preview és feltöltés">
             {frontImage ? (
               <button className="block w-full text-left" onClick={() => setPreviewAsset(frontImage)} type="button">
-                <img
-                  alt={frontImage.label}
-                  className="aspect-[3/4] w-full rounded-xl border border-slate-800 object-cover"
-                  src={mediaUrl(frontImage.file_path)}
-                />
+                <img alt={frontImage.label} className="aspect-[3/4] w-full rounded-xl border border-slate-800 object-cover" src={mediaUrl(frontImage.file_path)} />
               </button>
             ) : (
               <EmptyState label="Még nincs feltöltött kép." />
@@ -318,165 +351,70 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
             )}
             <form className="mt-4 space-y-3" onSubmit={handleUpload}>
               <FieldLabel label="Kép típusa">
-                <select
-                  className="w-full rounded-lg border border-slate-800 bg-charcoal-950 px-3 py-2 text-sm text-slate-100"
-                  onChange={(event) => setUploadLabel(event.target.value)}
-                  value={uploadLabel}
-                >
-                  {mediaLabels.map((label) => <option key={label}>{label}</option>)}
+                <select className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" value={uploadLabel} onChange={(event) => setUploadLabel(event.target.value)}>
+                  {mediaLabels.map((label) => <option key={label} value={label}>{label}</option>)}
                 </select>
               </FieldLabel>
-              <input
-                className="w-full rounded-lg border border-slate-800 bg-charcoal-950 px-3 py-2 text-sm text-slate-300"
-                onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)}
-                type="file"
-              />
-              <button
-                className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white hover:bg-blue-400 disabled:opacity-60"
-                disabled={busy || !uploadFile}
-                type="submit"
-              >
-                <Upload size={16} />
-                Kép feltöltése
+              <input className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-300" type="file" accept="image/*,video/mp4,video/webm,video/quicktime" onChange={(event) => setUploadFile(event.target.files?.[0] ?? null)} />
+              <button className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-60" disabled={busy || !uploadFile} type="submit">
+                <Upload size={16} /> Kép feltöltése
               </button>
             </form>
           </Panel>
 
           <Panel title="Ár precheck">
             {latestPrice ? (
-              <div className="grid grid-cols-2 gap-2 text-sm">
+              <div className="grid grid-cols-2 gap-2">
                 <StatCard label="Raw ár" value={formatHuf(latestPrice.raw_price_huf)} />
-                <StatCard label="PSA 8 ár" value={formatHuf(latestPrice.psa_8_price_huf)} />
-                <StatCard label="PSA 9 ár" value={formatHuf(latestPrice.psa_9_price_huf)} />
-                <StatCard label="PSA 10 ár" value={formatHuf(latestPrice.psa_10_price_huf)} />
+                <StatCard label="PSA 8" value={formatHuf(latestPrice.psa_8_price_huf)} />
+                <StatCard label="PSA 9" value={formatHuf(latestPrice.psa_9_price_huf)} />
+                <StatCard label="PSA 10" value={formatHuf(latestPrice.psa_10_price_huf)} />
                 <StatCard label="Confidence" value={formatNumber(latestPrice.price_confidence, 2)} />
               </div>
             ) : (
               <EmptyState label="Még nincs ár rögzítve." />
             )}
-            <form className="mt-4 grid grid-cols-2 gap-3" onSubmit={handlePriceSubmit}>
-              <FieldLabel label="Raw ár">
-                <input
-                  className="w-full rounded-lg border border-slate-800 bg-charcoal-950 px-3 py-2 text-sm text-slate-100"
-                  inputMode="decimal"
-                  onChange={(event) => setPriceForm((current) => ({ ...current, raw_price_huf: event.target.value }))}
-                  placeholder="pl. 8000"
-                  step="0.01"
-                  type="number"
-                  value={priceForm.raw_price_huf}
-                />
-              </FieldLabel>
-              <FieldLabel label="PSA 8 ár">
-                <input
-                  className="w-full rounded-lg border border-slate-800 bg-charcoal-950 px-3 py-2 text-sm text-slate-100"
-                  inputMode="decimal"
-                  onChange={(event) => setPriceForm((current) => ({ ...current, psa_8_price_huf: event.target.value }))}
-                  placeholder="pl. 18000"
-                  step="0.01"
-                  type="number"
-                  value={priceForm.psa_8_price_huf}
-                />
-              </FieldLabel>
-              <FieldLabel label="PSA 9 ár">
-                <input
-                  className="w-full rounded-lg border border-slate-800 bg-charcoal-950 px-3 py-2 text-sm text-slate-100"
-                  inputMode="decimal"
-                  onChange={(event) => setPriceForm((current) => ({ ...current, psa_9_price_huf: event.target.value }))}
-                  placeholder="pl. 32000"
-                  step="0.01"
-                  type="number"
-                  value={priceForm.psa_9_price_huf}
-                />
-              </FieldLabel>
-              <FieldLabel label="PSA 10 ár">
-                <input
-                  className="w-full rounded-lg border border-slate-800 bg-charcoal-950 px-3 py-2 text-sm text-slate-100"
-                  inputMode="decimal"
-                  onChange={(event) => setPriceForm((current) => ({ ...current, psa_10_price_huf: event.target.value }))}
-                  placeholder="pl. 55000"
-                  step="0.01"
-                  type="number"
-                  value={priceForm.psa_10_price_huf}
-                />
-              </FieldLabel>
+          </Panel>
+
+          <Panel title="Manuális ár rögzítése">
+            <form className="space-y-3" onSubmit={handlePriceSubmit}>
+              <div className="grid grid-cols-2 gap-3">
+                <FieldLabel label="Raw ár"><input className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" inputMode="decimal" placeholder="pl. 8000" value={priceForm.raw_price_huf} onChange={(event) => setPriceForm({ ...priceForm, raw_price_huf: event.target.value })} /></FieldLabel>
+                <FieldLabel label="PSA 8 ár"><input className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" inputMode="decimal" placeholder="pl. 18000" value={priceForm.psa_8_price_huf} onChange={(event) => setPriceForm({ ...priceForm, psa_8_price_huf: event.target.value })} /></FieldLabel>
+                <FieldLabel label="PSA 9 ár"><input className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" inputMode="decimal" placeholder="pl. 28000" value={priceForm.psa_9_price_huf} onChange={(event) => setPriceForm({ ...priceForm, psa_9_price_huf: event.target.value })} /></FieldLabel>
+                <FieldLabel label="PSA 10 ár"><input className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" inputMode="decimal" placeholder="pl. 65000" value={priceForm.psa_10_price_huf} onChange={(event) => setPriceForm({ ...priceForm, psa_10_price_huf: event.target.value })} /></FieldLabel>
+              </div>
               <FieldLabel label="Confidence">
-                <input
-                  className="w-full rounded-lg border border-slate-800 bg-charcoal-950 px-3 py-2 text-sm text-slate-100"
-                  inputMode="decimal"
-                  onChange={(event) => setPriceForm((current) => ({ ...current, price_confidence: event.target.value }))}
-                  placeholder="pl. 0.7"
-                  step="0.01"
-                  type="number"
-                  value={priceForm.price_confidence}
-                />
+                <input className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" inputMode="decimal" placeholder="pl. 0,7" value={priceForm.price_confidence} onChange={(event) => setPriceForm({ ...priceForm, price_confidence: event.target.value })} />
               </FieldLabel>
-              <label className="col-span-2 space-y-1.5 text-xs font-medium text-slate-400">
-                <span>Megjegyzés</span>
-                <textarea
-                  className="min-h-20 w-full rounded-lg border border-slate-800 bg-charcoal-950 px-3 py-2 text-sm text-slate-100"
-                  onChange={(event) => setPriceForm((current) => ({ ...current, notes: event.target.value }))}
-                  placeholder="pl. magyar piac, gyors ellenőrzés"
-                  value={priceForm.notes}
-                />
-              </label>
-              <button className="col-span-2 rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white hover:bg-blue-400 disabled:opacity-60" disabled={busy} type="submit">
-                Manuális ár mentése
-              </button>
+              <FieldLabel label="Megjegyzés">
+                <textarea className="min-h-20 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" placeholder="pl. lokális manuális becslés" value={priceForm.notes} onChange={(event) => setPriceForm({ ...priceForm, notes: event.target.value })} />
+              </FieldLabel>
+              <button className="w-full rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60" disabled={busy} type="submit">Ár mentése</button>
             </form>
           </Panel>
         </div>
 
         <div className="space-y-4">
-          <Panel
-            title="Képi elemzés"
-            subtitle="Lokális OpenCV preprocessing, resized képek és cropok."
-            action={
-              <button
-                className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white hover:bg-blue-400 disabled:opacity-60"
-                disabled={busy || !hasAnalysisImage}
-                onClick={runAnalysis}
-                type="button"
-              >
-                <Play size={16} />
-                {busyLabel === "Elemzés fut..." ? "Elemzés fut..." : "OpenCV elemzés indítása"}
+          <Panel title="Képi elemzés" subtitle="OpenCV előfeldolgozás és localhost-only Local AI opcionális elemzés.">
+            <div className="grid gap-3 md:grid-cols-2">
+              <button className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-60" disabled={busy} onClick={runAnalysis} type="button">
+                <Play size={16} /> {busyLabel === "Elemzés fut..." ? "Elemzés fut..." : "OpenCV elemzés indítása"}
               </button>
-            }
-          >
-            {latestAnalysis ? (
-              <div className="grid gap-3 sm:grid-cols-4">
+              <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-500/40 px-3 py-2 text-sm font-medium text-emerald-200 hover:bg-emerald-500/10 disabled:opacity-50" disabled={busy || !localAI?.enabled || !localAI.reachable} onClick={runLocalAI} type="button">
+                <Play size={16} /> Local AI elemzés indítása
+              </button>
+            </div>
+            {!localAI?.enabled && <p className="mt-3 text-sm text-amber-200">Local AI nincs bekapcsolva. Állítsd be az LM Studio/Ollama lokális szervert.</p>}
+            {localAI?.enabled && !localAI.reachable && <p className="mt-3 text-sm text-amber-200">{localAI.message}</p>}
+            {latestAnalysis && (
+              <div className="mt-4 grid grid-cols-2 gap-2">
                 <StatCard label="Status" value={latestAnalysis.status ?? "-"} />
                 <StatCard label="Centering" value={formatNumber(latestAnalysis.centering_score)} />
                 <StatCard label="Confidence" value={latestAnalysis.confidence_level ?? "-"} />
-                <StatCard label="OpenCV" value={latestAnalysis.opencv_version ?? "-"} />
-              </div>
-            ) : (
-              <EmptyState label="Még nincs elemzés. Tölts fel legalább egy front vagy back képet, majd indíts OpenCV elemzést." />
-            )}
-          </Panel>
-
-          <Panel title="Local AI elemzés" subtitle="Localhost-only vision model adapter. OpenCV elemzés után használható.">
-            {localAI && (!localAI.enabled || !localAI.reachable) && (
-              <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
-                Local AI nincs bekapcsolva. Állítsd be az LM Studio/Ollama lokális szervert.
+                <StatCard label="Version" value={latestAnalysis.analysis_version ?? "-"} />
               </div>
             )}
-            {localAI && (
-              <div className="mb-4 grid grid-cols-2 gap-2">
-                <StatCard label="Provider" value={localAI.provider} />
-                <StatCard label="Reachable" value={localAI.reachable ? "igen" : "nem"} tone={localAI.reachable ? "good" : "warn"} />
-                <StatCard label="Model" value={localAI.model_name || "-"} />
-                <StatCard label="Base URL" value={localAI.base_url} />
-              </div>
-            )}
-            <button
-              className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-blue-500/40 px-3 py-2 text-sm text-blue-200 hover:bg-blue-500/10 disabled:opacity-60"
-              disabled={busy || !localAI?.enabled || !localAI.reachable}
-              onClick={runLocalAI}
-              type="button"
-            >
-              <Play size={16} />
-              Local AI elemzés indítása
-            </button>
           </Panel>
 
           <Panel title="Analysis run lista">
@@ -506,6 +444,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
             ) : (
               <div className="space-y-5">
                 {([
+                  ["Annotated", groupedAssets.annotated],
                   ["Resized", groupedAssets.resized],
                   ["Corners", groupedAssets.corners],
                   ["Edges", groupedAssets.edges],
@@ -517,12 +456,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                     ) : (
                       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                         {assets.map((asset) => (
-                          <button
-                            key={asset.id}
-                            className="rounded-lg border border-slate-800 bg-charcoal-900 p-2 text-left transition hover:border-blue-500/50 hover:bg-slate-800/40"
-                            onClick={() => setPreviewAsset(asset)}
-                            type="button"
-                          >
+                          <button key={asset.id} className="rounded-lg border border-slate-800 bg-charcoal-900 p-2 text-left transition hover:border-blue-500/50 hover:bg-slate-800/40" onClick={() => setPreviewAsset(asset)} type="button">
                             <img className="aspect-square w-full rounded object-cover" src={mediaUrl(asset.file_path)} alt={asset.label ?? "asset"} />
                             <div className="mt-2 truncate text-xs text-slate-400">{asset.label}</div>
                           </button>
@@ -540,15 +474,14 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
           <Panel
             title="Score és report"
             action={
-              <button
-                className="inline-flex items-center gap-2 rounded-lg border border-blue-500/40 px-3 py-2 text-sm text-blue-200 hover:bg-blue-500/10 disabled:opacity-60"
-                disabled={busy || !latestAnalysis}
-                onClick={refreshScore}
-                type="button"
-              >
-                <RefreshCw size={16} />
-                {busyLabel === "Report frissítése..." ? "Report frissítése..." : "Score/report frissítése"}
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button className="inline-flex items-center gap-2 rounded-lg border border-blue-500/40 px-3 py-2 text-sm text-blue-200 hover:bg-blue-500/10 disabled:opacity-60" disabled={busy || !latestAnalysis} onClick={refreshScore} type="button">
+                  <RefreshCw size={16} /> {busyLabel === "Report frissítése..." ? "Report frissítése..." : "Score/report frissítése"}
+                </button>
+                <button className="inline-flex items-center gap-2 rounded-lg border border-amber-500/40 px-3 py-2 text-sm text-amber-200 hover:bg-amber-500/10 disabled:opacity-60" disabled={busy || !latestAnalysis || visibleFindings.length === 0} onClick={generateAnnotations} type="button">
+                  Annotációk generálása
+                </button>
+              </div>
             }
           >
             {!latestAnalysis ? (
@@ -559,11 +492,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-2">
                   <StatCard label="Overall score" value={formatNumber(report.scores.overall_score)} tone="good" />
-                  <StatCard
-                    label="Grade range"
-                    value={`${report.estimated_grade_range.estimated_grade_low ?? "-"} - ${report.estimated_grade_range.estimated_grade_high ?? "-"}`}
-                    tone="warn"
-                  />
+                  <StatCard label="Grade range" value={`${report.estimated_grade_range.estimated_grade_low ?? "-"} - ${report.estimated_grade_range.estimated_grade_high ?? "-"}`} tone="warn" />
                   <StatCard label="Centering" value={formatNumber(report.scores.centering_score)} />
                   <StatCard label="Corners" value={formatNumber(report.scores.corners_score)} />
                   <StatCard label="Edges" value={formatNumber(report.scores.edges_score)} />
@@ -575,30 +504,41 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                   <StatCard label="PSA 8 %" value={formatNumber(report.probabilities.psa_8_probability, 0)} />
                   <StatCard label="PSA 7- %" value={formatNumber(report.probabilities.psa_7_or_lower_probability, 0)} />
                 </div>
-                <div className="rounded-lg border border-slate-800 bg-charcoal-900 p-4 text-sm leading-6 text-slate-300">
-                  {report.human_summary}
-                </div>
+                <div className="rounded-lg border border-slate-800 bg-charcoal-900 p-4 text-sm leading-6 text-slate-300">{report.human_summary}</div>
                 <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-4 text-sm text-amber-100">
                   <div className="font-semibold">{report.recommendation ?? "-"}</div>
                   <p className="mt-2 leading-6">{report.recommendation_reason}</p>
                 </div>
-                {findings.length > 0 && (
+
+                {visibleFindings.length > 0 && (
                   <div className="rounded-lg border border-slate-800 bg-charcoal-900 p-4">
                     <h3 className="text-sm font-semibold text-slate-100">Talált hibák</h3>
                     <div className="mt-3 space-y-3">
-                      {findings.map((finding) => (
+                      {visibleFindings.map((finding) => (
                         <div key={finding.id} className="rounded-lg border border-slate-800 bg-slate-950/25 p-3 text-sm">
                           <div className="font-medium text-slate-100">{finding.title ?? "Finding"}</div>
-                          <div className="mt-1 text-xs text-slate-500">
-                            {finding.finding_type ?? "unknown"} · {finding.severity ?? "-"} · confidence {formatNumber(finding.confidence, 2)} · {finding.location_label ?? "-"}
+                          <div className="mt-2 flex flex-wrap gap-2">
+                            <FindingBadge>{finding.finding_type ?? "unknown"}</FindingBadge>
+                            <FindingBadge tone={severityTone(finding.severity)}>{finding.severity ?? "-"}</FindingBadge>
+                            <FindingBadge>confidence {formatNumber(finding.confidence, 2)}</FindingBadge>
+                            <FindingBadge tone={finding.grade_impact === "high" ? "danger" : "default"}>impact {finding.grade_impact ?? "-"}</FindingBadge>
                           </div>
                           <p className="mt-2 leading-5 text-slate-300">{finding.description}</p>
-                          <div className="mt-2 text-xs text-amber-200">Grade impact: {finding.grade_impact ?? "-"}</div>
+                          <div className="mt-2 text-xs text-slate-500">{finding.location_label ?? "-"}</div>
                         </div>
                       ))}
                     </div>
                   </div>
                 )}
+
+                {(report.strengths.length > 0 || report.main_grade_limiters.length > 0 || report.manual_review_recommendations.length > 0) && (
+                  <div className="grid gap-3">
+                    {report.strengths.length > 0 && <ReportList title="Erősségek" items={report.strengths} />}
+                    {report.main_grade_limiters.length > 0 && <ReportList title="Fő grade limiterek" items={report.main_grade_limiters} />}
+                    {report.manual_review_recommendations.length > 0 && <ReportList title="Manuális review javaslatok" items={report.manual_review_recommendations} />}
+                  </div>
+                )}
+
                 {report.opportunity_precheck && (
                   <div className="grid grid-cols-2 gap-2">
                     <StatCard label="Opp. raw" value={formatHuf(report.opportunity_precheck.raw_price_huf)} />
@@ -630,6 +570,17 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+function ReportList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div className="rounded-lg border border-slate-800 bg-charcoal-900 p-4 text-sm text-slate-300">
+      <h3 className="mb-2 font-semibold text-slate-100">{title}</h3>
+      <ul className="space-y-1">
+        {items.map((item) => <li key={item}>• {item}</li>)}
+      </ul>
     </div>
   );
 }

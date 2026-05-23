@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from sqlmodel import SQLModel
+from sqlmodel import Field, SQLModel
 
 from .prices import GradingOpportunityRead, PriceObservationRead
 
@@ -125,3 +125,7 @@ class AnalysisReportRead(SQLModel):
     latest_price: Optional[PriceObservationRead] = None
     opportunity_precheck: Optional[GradingOpportunityRead] = None
     assets: list[AnalysisAssetRead]
+    findings: list[AnalysisFindingRead] = Field(default_factory=list)
+    strengths: list[str] = Field(default_factory=list)
+    main_grade_limiters: list[str] = Field(default_factory=list)
+    manual_review_recommendations: list[str] = Field(default_factory=list)

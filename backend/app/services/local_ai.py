@@ -266,7 +266,7 @@ def save_findings(session: Session, analysis_run: AnalysisRun, data: dict[str, A
         )
 
 
-def run_local_ai_fast(session: Session, owned_card_id: int) -> AnalysisRun:
+def run_local_ai_fast(session: Session, owned_card_id: int) -> dict[str, Any]:
     owned_card = session.get(OwnedCard, owned_card_id)
     if owned_card is None:
         raise HTTPException(status_code=404, detail="Owned card not found")
@@ -307,7 +307,22 @@ def run_local_ai_fast(session: Session, owned_card_id: int) -> AnalysisRun:
         session.add(analysis_run)
         session.commit()
         session.refresh(analysis_run)
-        return analysis_run
+        findings = session.exec(
+            select(AnalysisFinding)
+            .where(AnalysisFinding.analysis_run_id == analysis_run.id)
+            .order_by(AnalysisFinding.created_at, AnalysisFinding.id)
+        ).all()
+        from .scoring import score_analysis_run
+
+        if findings:
+            from .annotations import generate_annotations
+            generate_annotations(session, analysis_run.id)
+        analysis_run = score_analysis_run(session, analysis_run.id)
+        return {
+            "analysis_run": analysis_run,
+            "finding_count": len(findings),
+            "status": analysis_run.status,
+        }
     except Exception as exc:
         analysis_run.status = "failed"
         analysis_run.error_message = str(exc)

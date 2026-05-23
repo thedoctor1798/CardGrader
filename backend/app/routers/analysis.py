@@ -6,6 +6,7 @@ from sqlmodel import Session, select
 from ..database import get_session
 from ..models import AnalysisAsset, AnalysisFinding, AnalysisRun, OwnedCard
 from ..schemas import AnalysisReportRead, AnalysisRunDetailRead, AnalysisRunRead
+from ..services.annotations import generate_annotations
 from ..services.opencv_analysis import run_opencv_analysis
 from ..services.reporting import build_analysis_report
 from ..services.scoring import score_analysis_run
@@ -63,6 +64,14 @@ def score_run(
     session: Session = Depends(get_session),
 ):
     return score_analysis_run(session, analysis_run_id)
+
+
+@router.post("/analysis-runs/{analysis_run_id}/annotate")
+def annotate_run(
+    analysis_run_id: int,
+    session: Session = Depends(get_session),
+):
+    return generate_annotations(session, analysis_run_id)
 
 
 @router.get("/analysis-runs/{analysis_run_id}/report", response_model=AnalysisReportRead)
