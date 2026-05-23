@@ -11,11 +11,17 @@ from sqlmodel import Session, select
 from ..config import MEDIA_DIR, ROOT
 from ..models import AnalysisAsset, AnalysisFinding, AnalysisRun, CardMedia, OwnedCard
 
-ANALYSIS_VERSION = "opencv_mvp_v1"
+ANALYSIS_VERSION = "opencv_mvp_v2_normalized"
+NORMALIZED_WIDTH = 1000
+NORMALIZED_HEIGHT = 1400
+MIN_CARD_AREA_RATIO = 0.18
+CARD_ASPECT_MIN = 0.52
+CARD_ASPECT_MAX = 0.9
 SUMMARY_HU = (
-    "Lokális OpenCV előelemzés elkészült. A rendszer resized képeket, "
-    "sarok- és élkivágásokat generált. A centering pontszám MVP becslés, "
-    "nem végleges grading érték."
+    "Lokalis OpenCV eloelemzes elkeszult. A rendszer resized es normalizalt "
+    "kartya-kepeket keszit, majd a sarok- es elkivagasokat a normalizalt "
+    "kartya kepbol generalja. A centering pontszam MVP becsles, nem vegleges "
+    "grading ertek."
 )
 
 
@@ -31,6 +37,14 @@ class ImageMetrics:
     usable: bool
     centering_score: float
     border_ratios: Optional[dict[str, float]]
+
+
+@dataclass
+class NormalizationResult:
+    normalized: Optional[np.ndarray]
+    overlay: np.ndarray
+    quad: Optional[np.ndarray]
+    warning: Optional[str]
 
 
 def relative_to_root(path: Path) -> str:
@@ -85,6 +99,110 @@ def resize_for_analysis(image: np.ndarray, max_long_edge: int = 1600) -> np.ndar
     new_width = max(1, int(width * scale))
     new_height = max(1, int(height * scale))
     return cv2.resize(image, (new_width, new_height), interpolation=cv2.INTER_AREA)
+
+
+def order_quad_points(points: np.ndarray) -> np.ndarray:
+    pts = points.reshape(4, 2).astype("float32")
+    sums = pts.sum(axis=1)
+    diffs = np.diff(pts, axis=1).reshape(4)
+    ordered = np.zeros((4, 2), dtype="float32")
+    ordered[0] = pts[np.argmin(sums)]
+    ordered[2] = pts[np.argmax(sums)]
+    ordered[1] = pts[np.argmin(diffs)]
+    ordered[3] = pts[np.argmax(diffs)]
+    return ordered
+
+
+def quad_dimensions(quad: np.ndarray) -> tuple[float, float]:
+    tl, tr, br, bl = quad
+    width_top = np.linalg.norm(tr - tl)
+    width_bottom = np.linalg.norm(br - bl)
+    height_left = np.linalg.norm(bl - tl)
+    height_right = np.linalg.norm(br - tr)
+    return max(width_top, width_bottom), max(height_left, height_right)
+
+
+def is_plausible_card_quad(quad: np.ndarray, image_shape: tuple[int, int, int]) -> bool:
+    height, width = image_shape[:2]
+    area = float(cv2.contourArea(quad.astype("float32")))
+    if area < width * height * MIN_CARD_AREA_RATIO:
+        return False
+    quad_width, quad_height = quad_dimensions(quad)
+    if quad_width <= 0 or quad_height <= 0:
+        return False
+    ratio = min(quad_width, quad_height) / max(quad_width, quad_height)
+    return CARD_ASPECT_MIN <= ratio <= CARD_ASPECT_MAX
+
+
+def find_card_quad(image: np.ndarray) -> Optional[np.ndarray]:
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(blurred, 40, 140)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=2)
+    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return None
+
+    for contour in sorted(contours, key=cv2.contourArea, reverse=True)[:12]:
+        if cv2.contourArea(contour) < image.shape[0] * image.shape[1] * MIN_CARD_AREA_RATIO:
+            continue
+        perimeter = cv2.arcLength(contour, True)
+        for epsilon in (0.015, 0.025, 0.035, 0.05):
+            approx = cv2.approxPolyDP(contour, epsilon * perimeter, True)
+            if len(approx) == 4:
+                ordered = order_quad_points(approx)
+                if is_plausible_card_quad(ordered, image.shape):
+                    return ordered
+
+    for contour in sorted(contours, key=cv2.contourArea, reverse=True)[:5]:
+        rect = cv2.minAreaRect(contour)
+        box = cv2.boxPoints(rect)
+        ordered = order_quad_points(box)
+        if is_plausible_card_quad(ordered, image.shape):
+            return ordered
+    return None
+
+
+def warp_card(image: np.ndarray, quad: np.ndarray) -> np.ndarray:
+    source = order_quad_points(quad)
+    target = np.array(
+        [
+            [0, 0],
+            [NORMALIZED_WIDTH - 1, 0],
+            [NORMALIZED_WIDTH - 1, NORMALIZED_HEIGHT - 1],
+            [0, NORMALIZED_HEIGHT - 1],
+        ],
+        dtype="float32",
+    )
+    matrix = cv2.getPerspectiveTransform(source, target)
+    return cv2.warpPerspective(image, matrix, (NORMALIZED_WIDTH, NORMALIZED_HEIGHT))
+
+
+def contour_overlay(image: np.ndarray, quad: Optional[np.ndarray], warning: Optional[str]) -> np.ndarray:
+    overlay = image.copy()
+    if quad is not None:
+        points = order_quad_points(quad).astype(int).reshape((-1, 1, 2))
+        cv2.polylines(overlay, [points], True, (0, 255, 0), 4)
+        for index, point in enumerate(points.reshape(4, 2), start=1):
+            cv2.circle(overlay, tuple(point), 8, (0, 180, 255), -1)
+            cv2.putText(overlay, str(index), tuple(point + 14), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 180, 255), 2)
+    if warning:
+        cv2.putText(overlay, warning[:80], (24, 48), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (0, 80, 255), 2)
+    return overlay
+
+
+def normalize_card_image(image: np.ndarray) -> NormalizationResult:
+    quad = find_card_quad(image)
+    if quad is None:
+        warning = "card contour not found"
+        return NormalizationResult(None, contour_overlay(image, None, warning), None, warning)
+    try:
+        normalized = warp_card(image, quad)
+    except cv2.error as exc:
+        warning = f"card normalization failed: {exc}"
+        return NormalizationResult(None, contour_overlay(image, quad, warning), quad, warning)
+    return NormalizationResult(normalized, contour_overlay(image, quad, None), quad, None)
 
 
 def glare_risk_from_percent(glare_percent: float) -> str:
@@ -163,10 +281,10 @@ def calculate_metrics(image: np.ndarray) -> ImageMetrics:
 
 def crop_regions(image: np.ndarray) -> dict[str, np.ndarray]:
     height, width = image.shape[:2]
-    corner_width = max(1, int(width * 0.22))
+    corner_width = max(1, int(width * 0.28))
     corner_height = max(1, int(height * 0.22))
-    edge_y = max(1, int(height * 0.18))
-    edge_x = max(1, int(width * 0.18))
+    edge_y = max(1, int(height * 0.16))
+    edge_x = max(1, int(width * 0.16))
 
     return {
         "corner_tl": image[0:corner_height, 0:corner_width],
@@ -178,6 +296,18 @@ def crop_regions(image: np.ndarray) -> dict[str, np.ndarray]:
         "edge_bottom": image[height - edge_y : height, :],
         "edge_left": image[:, 0:edge_x],
     }
+
+
+def crop_is_valid(crop: np.ndarray) -> bool:
+    if crop is None or crop.size == 0:
+        return False
+    height, width = crop.shape[:2]
+    if height < 60 or width < 60:
+        return False
+    gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY)
+    mean = float(gray.mean())
+    std = float(gray.std())
+    return not (std < 0.5 and (mean < 3.0 or mean > 252.0))
 
 
 def add_asset(session: Session, analysis_run_id: int, asset_type: str, label: str, path: Path) -> None:
@@ -226,6 +356,37 @@ def add_metrics_finding(
                 f"glare_percent={metrics.glare_percent}, {border_text}"
             ),
             grade_impact=None if metrics.usable else "low",
+            side=label if label in {"front", "back"} else "unknown",
+            confirmed=False,
+            uncertainty_reason=None if metrics.usable else "Image quality reduced OpenCV confidence.",
+            photo_quality_issue=not metrics.usable,
+        )
+    )
+
+
+def add_preprocessing_warning(
+    session: Session,
+    analysis_run_id: int,
+    media_id: int,
+    label: str,
+    title: str,
+    description: str,
+) -> None:
+    session.add(
+        AnalysisFinding(
+            analysis_run_id=analysis_run_id,
+            media_id=media_id,
+            finding_type="image_quality_issue",
+            severity="minor",
+            confidence=0.65,
+            location_label=label,
+            title=title,
+            description=description,
+            grade_impact="low",
+            side=label if label in {"front", "back"} else "unknown",
+            confirmed=False,
+            uncertainty_reason=description,
+            photo_quality_issue=True,
         )
     )
 
@@ -241,12 +402,46 @@ def process_media_image(session: Session, analysis_run: AnalysisRun, media: Card
     write_jpeg(resized_path, resized)
     add_asset(session, analysis_run.id, "resized_image", f"{label}_resized", resized_path)
 
-    crop_dir = MEDIA_DIR / "crops" / str(analysis_run.id)
-    for crop_label, crop_image in crop_regions(resized).items():
-        asset_label = f"{label}_{crop_label}"
-        crop_path = crop_dir / f"{asset_label}.jpg"
-        write_jpeg(crop_path, crop_image)
-        add_asset(session, analysis_run.id, "crop", asset_label, crop_path)
+    normalization = normalize_card_image(resized)
+    debug_dir = MEDIA_DIR / "annotated" / str(analysis_run.id)
+    overlay_path = debug_dir / f"{label}_detected_contour_overlay.jpg"
+    write_jpeg(overlay_path, normalization.overlay)
+    add_asset(session, analysis_run.id, "opencv_debug", f"{label}_detected_contour_overlay", overlay_path)
+
+    if normalization.normalized is None:
+        add_preprocessing_warning(
+            session,
+            analysis_run.id,
+            media.id,
+            label,
+            f"{label} card normalization failed",
+            normalization.warning or "OpenCV could not detect a reliable card contour.",
+        )
+    else:
+        normalized_path = MEDIA_DIR / "normalized" / str(analysis_run.id) / f"{label}_normalized.jpg"
+        write_jpeg(normalized_path, normalization.normalized)
+        add_asset(session, analysis_run.id, "normalized_image", f"{label}_normalized", normalized_path)
+
+        preview_path = debug_dir / f"{label}_normalized_preview.jpg"
+        write_jpeg(preview_path, normalization.normalized)
+        add_asset(session, analysis_run.id, "opencv_debug", f"{label}_normalized_preview", preview_path)
+
+        crop_dir = MEDIA_DIR / "crops" / str(analysis_run.id)
+        for crop_label, crop_image in crop_regions(normalization.normalized).items():
+            asset_label = f"{label}_{crop_label}"
+            if not crop_is_valid(crop_image):
+                add_preprocessing_warning(
+                    session,
+                    analysis_run.id,
+                    media.id,
+                    asset_label,
+                    f"{asset_label} crop skipped",
+                    "OpenCV skipped this crop because the normalized crop did not contain enough usable detail.",
+                )
+                continue
+            crop_path = crop_dir / f"{asset_label}.jpg"
+            write_jpeg(crop_path, crop_image)
+            add_asset(session, analysis_run.id, "crop", asset_label, crop_path)
 
     add_metrics_finding(session, analysis_run.id, media.id, label, metrics)
     return metrics

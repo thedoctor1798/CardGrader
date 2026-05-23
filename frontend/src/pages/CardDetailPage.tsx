@@ -227,13 +227,15 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const groupedAssets = useMemo(() => {
     const assets = report?.assets ?? [];
     return {
+      normalized: assets.filter((asset) => asset.asset_type === "normalized_image"),
+      crops: assets.filter((asset) => asset.asset_type === "crop"),
       front: assets.filter((asset) => asset.label?.startsWith("front")),
       back: assets.filter((asset) => asset.label?.startsWith("back")),
       resized: assets.filter((asset) => asset.asset_type === "resized_image"),
       corners: assets.filter((asset) => asset.label?.includes("corner")),
       edges: assets.filter((asset) => asset.label?.includes("edge")),
       annotated: assets.filter((asset) => asset.asset_type === "annotated_image"),
-      debug: assets.filter((asset) => asset.asset_type?.startsWith("local_ai")),
+      debug: assets.filter((asset) => asset.asset_type?.startsWith("local_ai") || asset.asset_type === "opencv_debug"),
     };
   }, [report]);
 
@@ -375,11 +377,11 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
     setBusyLabel("Local AI elemzés fut...");
     setMessage(null);
     try {
-      const aiResult = await api.runLocalAIFastAnalysis(ownedCardId);
+      const aiResult = await api.runLocalAIFullReview(ownedCardId);
       const runsData = await api.getAnalysisRuns(ownedCardId);
       setAnalysisRuns(runsData);
-      await loadReport(aiResult.analysis_run.id);
-      setMessage(`Local AI elemzés elkészült. Findingok: ${aiResult.finding_count}.`);
+      await loadReport(aiResult.aggregate.analysis_run.id);
+      setMessage(`Local AI elemzés elkészült. Findingok: ${aiResult.aggregate.finding_count}.`);
       setError(null);
     } catch (err) {
       const detail = err instanceof Error ? err.message : "Local AI elemzési hiba";
@@ -608,27 +610,12 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
 
         <div className="space-y-4">
           <Panel title="Képi elemzés" subtitle="OpenCV előfeldolgozás és localhost-only Local AI opcionális elemzés.">
-            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
+            <div className="grid gap-3 md:grid-cols-2">
               <button className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-60" disabled={busy} onClick={runAnalysis} type="button">
                 <Play size={16} /> {busyLabel === "Elemzés fut..." ? "Elemzés fut..." : "OpenCV elemzés indítása"}
               </button>
-              <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-500/40 px-3 py-2 text-sm font-medium text-emerald-200 hover:bg-emerald-500/10 disabled:opacity-50" disabled={busy || Boolean(localAIBlockedReason)} onClick={runLocalAI} type="button">
-                <Play size={16} /> Local AI elemzés indítása
-              </button>
-              <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-500/40 px-3 py-2 text-sm font-medium text-blue-200 hover:bg-blue-500/10 disabled:opacity-50" disabled={busy || Boolean(localAIBlockedReason)} onClick={() => runLocalAIPass("front")} type="button">
-                Front elemzés
-              </button>
-              <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-500/40 px-3 py-2 text-sm font-medium text-blue-200 hover:bg-blue-500/10 disabled:opacity-50" disabled={busy || Boolean(localAIBlockedReason)} onClick={() => runLocalAIPass("back")} type="button">
-                Back elemzés
-              </button>
-              <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-500/40 px-3 py-2 text-sm font-medium text-emerald-200 hover:bg-emerald-500/10 disabled:opacity-50" disabled={busy || Boolean(localAIBlockedReason)} onClick={runLocalAIFullReview} type="button">
-                Teljes local AI review
-              </button>
-              <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-600 px-3 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800/50 disabled:opacity-50" disabled={busy || !latestOpenCvAnalysis} onClick={runLocalAIDryRun} type="button">
-                Local AI dry-run
-              </button>
-              <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-amber-500/40 px-3 py-2 text-sm font-medium text-amber-200 hover:bg-amber-500/10 disabled:opacity-50" disabled={busy || Boolean(localAIBlockedReason)} onClick={runLocalAIDebugSingleImage} type="button">
-                Local AI single-image debug
+              <button className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50" disabled={busy || Boolean(localAIBlockedReason)} onClick={runLocalAI} type="button">
+                <Play size={16} /> Local AI elemzés
               </button>
             </div>
             {localAIBlockedReason && <p className="mt-3 text-sm text-amber-200">{localAIBlockedReason}</p>}
@@ -642,6 +629,25 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                 <StatCard label="Version" value={latestAnalysis.analysis_version ?? "-"} />
               </div>
             )}
+            <details className="mt-4 rounded-lg border border-slate-800 bg-slate-950/25 p-3">
+              <summary className="cursor-pointer text-sm font-medium text-slate-300">Fejlesztői / Debug eszközök</summary>
+              <div className="mt-3 grid gap-2 md:grid-cols-2">
+                <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-500/40 px-3 py-2 text-sm font-medium text-blue-200 hover:bg-blue-500/10 disabled:opacity-50" disabled={busy || Boolean(localAIBlockedReason)} onClick={() => runLocalAIPass("front")} type="button">
+                  Front elemzés
+                </button>
+                <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-500/40 px-3 py-2 text-sm font-medium text-blue-200 hover:bg-blue-500/10 disabled:opacity-50" disabled={busy || Boolean(localAIBlockedReason)} onClick={() => runLocalAIPass("back")} type="button">
+                  Back elemzés
+                </button>
+                <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-500/40 px-3 py-2 text-sm font-medium text-emerald-200 hover:bg-emerald-500/10 disabled:opacity-50" disabled={busy || Boolean(localAIBlockedReason)} onClick={runLocalAIFullReview} type="button">
+                  Teljes local AI review
+                </button>
+                <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-600 px-3 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800/50 disabled:opacity-50" disabled={busy || !latestOpenCvAnalysis} onClick={runLocalAIDryRun} type="button">
+                  Local AI dry-run
+                </button>
+                <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-amber-500/40 px-3 py-2 text-sm font-medium text-amber-200 hover:bg-amber-500/10 disabled:opacity-50 md:col-span-2" disabled={busy || Boolean(localAIBlockedReason)} onClick={runLocalAIDebugSingleImage} type="button">
+                  Local AI single-image debug
+                </button>
+              </div>
             {localAIDryRun && (
               <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-sm text-slate-300">
                 <div className="font-medium text-slate-100">Local AI dry-run</div>
@@ -685,6 +691,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                 )}
               </div>
             )}
+            </details>
           </Panel>
 
           <Panel title="Analysis run lista">
@@ -714,13 +721,11 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
             ) : (
               <div className="space-y-5">
                 {([
+                  ["Normalized", groupedAssets.normalized],
+                  ["Crops", groupedAssets.crops],
                   ["Annotated", groupedAssets.annotated],
-                  ["Front", groupedAssets.front],
-                  ["Back", groupedAssets.back],
                   ["Debug", groupedAssets.debug],
                   ["Resized", groupedAssets.resized],
-                  ["Corners", groupedAssets.corners],
-                  ["Edges", groupedAssets.edges],
                 ] as const).map(([title, assets]) => (
                   <div key={title}>
                     <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">{title}</h3>
@@ -730,7 +735,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                         {assets.map((asset) => (
                           <button key={asset.id} className="rounded-lg border border-slate-800 bg-charcoal-900 p-2 text-left transition hover:border-blue-500/50 hover:bg-slate-800/40" onClick={() => setPreviewAsset(asset)} type="button">
-                            {title === "Debug" ? (
+                            {asset.asset_type?.startsWith("local_ai") ? (
                               <div className="flex aspect-square w-full items-center justify-center rounded bg-slate-950 p-2 text-center text-xs text-slate-400">debug file</div>
                             ) : (
                               <img className="aspect-square w-full rounded object-cover" src={mediaUrl(asset.file_path)} alt={asset.label ?? "asset"} />
@@ -748,19 +753,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
         </div>
 
         <div className="space-y-4">
-          <Panel
-            title="Score és report"
-            action={
-              <div className="flex flex-wrap gap-2">
-                <button className="inline-flex items-center gap-2 rounded-lg border border-blue-500/40 px-3 py-2 text-sm text-blue-200 hover:bg-blue-500/10 disabled:opacity-60" disabled={busy || !latestAnalysis} onClick={refreshScore} type="button">
-                  <RefreshCw size={16} /> {busyLabel === "Report frissítése..." ? "Report frissítése..." : "Score/report frissítése"}
-                </button>
-                <button className="inline-flex items-center gap-2 rounded-lg border border-amber-500/40 px-3 py-2 text-sm text-amber-200 hover:bg-amber-500/10 disabled:opacity-60" disabled={busy || !latestAnalysis || visibleFindings.length === 0} onClick={generateAnnotations} type="button">
-                  Annotációk generálása
-                </button>
-              </div>
-            }
-          >
+          <Panel title="Score és report">
             {!latestAnalysis ? (
               <EmptyState label="Még nincs elemzés. Tölts fel legalább egy front vagy back képet, majd indíts OpenCV elemzést." />
             ) : !report ? (
@@ -786,6 +779,18 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                   <div className="font-semibold">{report.recommendation ?? "-"}</div>
                   <p className="mt-2 leading-6">{report.recommendation_reason}</p>
                 </div>
+
+                <details className="rounded-lg border border-slate-800 bg-slate-950/25 p-3">
+                  <summary className="cursor-pointer text-sm font-medium text-slate-300">Fejlesztői / Debug eszközök</summary>
+                  <div className="mt-3 flex flex-wrap gap-2">
+                    <button className="inline-flex items-center gap-2 rounded-lg border border-blue-500/40 px-3 py-2 text-sm text-blue-200 hover:bg-blue-500/10 disabled:opacity-60" disabled={busy || !latestAnalysis} onClick={refreshScore} type="button">
+                      <RefreshCw size={16} /> Score/report frissítése
+                    </button>
+                    <button className="inline-flex items-center gap-2 rounded-lg border border-amber-500/40 px-3 py-2 text-sm text-amber-200 hover:bg-amber-500/10 disabled:opacity-60" disabled={busy || !latestAnalysis || visibleFindings.length === 0} onClick={generateAnnotations} type="button">
+                      Annotációk generálása
+                    </button>
+                  </div>
+                </details>
 
                 <FindingSection title="Front findings" findings={frontFindings} />
                 <FindingSection title="Back findings" findings={backFindings} />

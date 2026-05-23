@@ -39,7 +39,7 @@ def candidate_assets(session: Session, analysis_run: AnalysisRun) -> list[Analys
     return session.exec(
         select(AnalysisAsset)
         .where(AnalysisAsset.analysis_run_id.in_(run_ids))
-        .where(AnalysisAsset.asset_type.in_(["resized_image", "crop"]))
+        .where(AnalysisAsset.asset_type.in_(["resized_image", "normalized_image", "crop"]))
         .order_by(AnalysisAsset.analysis_run_id.desc(), AnalysisAsset.asset_type.desc(), AnalysisAsset.id)
     ).all()
 
@@ -100,10 +100,10 @@ def choose_source_asset(
     for side in ["front", "back"]:
         if side in tokens:
             for asset in assets:
-                if asset.asset_type == "resized_image" and side in (asset.label or "").lower():
+                if asset.asset_type in {"normalized_image", "resized_image"} and side in (asset.label or "").lower():
                     return asset
 
-    return next((asset for asset in assets if asset.asset_type == "resized_image"), None) or (assets[0] if assets else None)
+    return next((asset for asset in assets if asset.asset_type == "normalized_image"), None) or next((asset for asset in assets if asset.asset_type == "resized_image"), None) or (assets[0] if assets else None)
 
 
 def bbox_region(finding: AnalysisFinding, width: int, height: int) -> tuple[int, int, int, int] | None:

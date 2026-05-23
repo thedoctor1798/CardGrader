@@ -137,7 +137,7 @@ def cleanup_folder(folder: Path) -> int:
 
 @router.post("/demo/cleanup-generated-media")
 def cleanup_generated_media():
-    folders = ["resized", "crops", "annotated", "video_frames", "reports"]
+    folders = ["resized", "normalized", "crops", "annotated", "video_frames", "reports"]
     deleted = {folder: cleanup_folder(MEDIA_DIR / folder) for folder in folders}
     return {
         "status": "ok",

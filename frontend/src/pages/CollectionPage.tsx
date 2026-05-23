@@ -208,26 +208,15 @@ export function CollectionPage({ onOpenOwnedCard }: CollectionPageProps) {
       title="Gyűjtemény"
       subtitle="Saját kártyák és owned copy rekordok a helyi SQLite adatbázisból."
       action={
-        <div className="flex flex-wrap gap-2">
-          <button
-            className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-60"
-            disabled={busy}
-            onClick={() => setShowCreate(true)}
-            type="button"
-          >
-            <Plus size={16} />
-            Új kártya hozzáadása
-          </button>
-          <button
-            className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-sm font-medium text-slate-300 hover:bg-slate-800/50 disabled:opacity-60"
-            disabled={busy}
-            onClick={seedRowlet}
-            type="button"
-          >
-            <RefreshCw size={16} />
-            Rowlet demo seed
-          </button>
-        </div>
+        <button
+          className="inline-flex items-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-60"
+          disabled={busy}
+          onClick={() => setShowCreate(true)}
+          type="button"
+        >
+          <Plus size={16} />
+          Új kártya hozzáadása
+        </button>
       }
     >
       {message && <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-200">{message}</div>}
@@ -235,6 +224,18 @@ export function CollectionPage({ onOpenOwnedCard }: CollectionPageProps) {
       <div className="mb-4 rounded-lg border border-blue-500/20 bg-blue-500/10 p-3 text-sm text-blue-100">
         A demo seed mostantól nem hoz létre duplikátumot. Az elsődleges út az új kártya hozzáadása.
       </div>
+      <details className="mb-4 rounded-lg border border-slate-800 bg-slate-950/25 p-3">
+        <summary className="cursor-pointer text-sm font-medium text-slate-300">Fejlesztői / Debug eszközök</summary>
+        <button
+          className="mt-3 inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-sm font-medium text-slate-300 hover:bg-slate-800/50 disabled:opacity-60"
+          disabled={busy}
+          onClick={seedRowlet}
+          type="button"
+        >
+          <RefreshCw size={16} />
+          Rowlet demo seed
+        </button>
+      </details>
 
       {showCreate && (
         <div className="mb-5 rounded-xl border border-slate-800 bg-slate-950/35 p-4">

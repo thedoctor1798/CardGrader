@@ -91,6 +91,7 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8710/api/demo/cleanup-gener
 Cleaned folders:
 
 - media/resized
+- media/normalized
 - media/crops
 - media/annotated
 - media/video_frames
@@ -135,9 +136,11 @@ After creating a card you can:
 - Upload front/back images from the card detail page.
 - Add manual prices in the price panel.
 - Run OpenCV analysis.
-- If configured, run Local AI dry-run first, then Local AI analysis.
+- If configured, run Local AI analysis.
 
 The Rowlet demo seed remains available for testing, but it is no longer the main workflow.
+
+The main UI now keeps the normal grading workflow visible: add a card, upload front/back images, run OpenCV, run Local AI, review the report, and save manual prices. Developer and troubleshooting actions such as dry-run, single-image debug, and demo seed are grouped under collapsed `Fejlesztői / Debug eszközök` sections.
 
 ## Media Upload Test
 
@@ -168,6 +171,8 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8710/api/owned-cards/1/anal
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8710/api/analysis-runs/1/score
 Invoke-RestMethod -Method Get -Uri http://127.0.0.1:8710/api/analysis-runs/1/report
 ```
+
+OpenCV preprocessing now detects the card outline, creates a perspective-corrected normalized card image, and generates corner/edge crops from that normalized card image instead of the surrounding photo background. Debug assets include detected contour overlays and normalized previews so crop quality can be checked visually. If reliable card extraction fails, the resized image is kept and misleading corner/edge crops are skipped.
 
 ## Local AI Setup
 
@@ -283,7 +288,7 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8710/api/local-ai/test-conn
 ## Local Files
 
 - Database: `data/cardgrader.db`
-- Media folders: `media/originals`, `media/resized`, `media/crops`, `media/annotated`, `media/video_frames`, `media/reports`
+- Media folders: `media/originals`, `media/resized`, `media/normalized`, `media/crops`, `media/annotated`, `media/video_frames`, `media/reports`
 
 Do not commit local database or media files.
 
