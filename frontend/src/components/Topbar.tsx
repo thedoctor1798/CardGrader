@@ -2,7 +2,7 @@ import { ShieldCheck } from "lucide-react";
 
 export function Topbar() {
   return (
-    <header className="flex flex-col gap-3 border-b border-slate-800 bg-charcoal-900/80 px-5 py-4 md:flex-row md:items-center md:justify-between">
+    <header className="sticky top-0 z-20 flex flex-col gap-3 border-b border-slate-800 bg-charcoal-900/90 px-5 py-4 backdrop-blur md:flex-row md:items-center md:justify-between">
       <div>
         <h1 className="text-lg font-semibold text-slate-100">CardGrader AI Local Edition</h1>
         <p className="text-xs text-slate-500">Lokális gyűjtemény, ár és grading precheck</p>

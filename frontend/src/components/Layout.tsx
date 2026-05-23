@@ -15,7 +15,7 @@ export function Layout({ page, onNavigate, children }: LayoutProps) {
       <Sidebar page={page} onNavigate={onNavigate} />
       <div className="min-w-0 flex-1">
         <Topbar />
-        <main className="mx-auto w-full max-w-[1800px] px-4 py-5 sm:px-6">{children}</main>
+        <main className="mx-auto w-full max-w-[1900px] px-4 py-6 sm:px-6 lg:px-8">{children}</main>
       </div>
     </div>
   );

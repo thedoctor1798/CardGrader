@@ -51,11 +51,7 @@ export function CollectionPage({ onOpenOwnedCard }: CollectionPageProps) {
     try {
       const result = await api.seedRowlet();
       await load();
-      if (result.created) {
-        setMessage("Rowlet demo létrehozva.");
-      } else {
-        setMessage("Rowlet demo már létezik, megnyitva/frissítve.");
-      }
+      setMessage(result.created ? "Rowlet demo létrehozva." : "Rowlet demo már létezik, megnyitva/frissítve.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ismeretlen hiba");
     } finally {
@@ -68,7 +64,7 @@ export function CollectionPage({ onOpenOwnedCard }: CollectionPageProps) {
   return (
     <Panel
       title="Gyűjtemény"
-      subtitle="Owned card rekordok a helyi SQLite adatbázisból."
+      subtitle="Owned card rekordok a helyi SQLite adatbázisból. A demo seed mostantól nem hoz létre duplikátumot."
       action={
         <button
           className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white hover:bg-blue-400 disabled:opacity-60"
@@ -83,12 +79,16 @@ export function CollectionPage({ onOpenOwnedCard }: CollectionPageProps) {
     >
       {message && <div className="mb-4 rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-200">{message}</div>}
       {error && <div className="mb-4 rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-200">{error}</div>}
+      <div className="mb-4 rounded-lg border border-blue-500/20 bg-blue-500/10 p-3 text-sm text-blue-100">
+        A demo seed mostantól nem hoz létre duplikátumot. Régi tesztadatot nem törlünk automatikusan.
+      </div>
+
       {items.length === 0 ? (
         <EmptyState label="Még nincs owned card rekord. A Rowlet demo seed gombbal létrehozhatsz egyet." />
       ) : (
-        <div className="overflow-hidden rounded-lg border border-slate-800">
+        <div className="overflow-hidden rounded-xl border border-slate-800">
           <table className="min-w-full divide-y divide-slate-800 text-sm">
-            <thead className="bg-charcoal-900 text-left text-xs uppercase tracking-wide text-slate-500">
+            <thead className="bg-slate-950/35 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="px-4 py-3">ID</th>
                 <th className="px-4 py-3">Kártya</th>
@@ -101,21 +101,25 @@ export function CollectionPage({ onOpenOwnedCard }: CollectionPageProps) {
             </thead>
             <tbody className="divide-y divide-slate-800 bg-charcoal-850">
               {items.map((item) => (
-                <tr key={item.id} className="hover:bg-slate-800/40">
-                  <td className="px-4 py-3 text-slate-400">{item.id}</td>
-                  <td className="px-4 py-3">
+                <tr key={item.id} className="transition hover:bg-slate-800/40">
+                  <td className="px-4 py-4 text-slate-400">{item.id}</td>
+                  <td className="px-4 py-4">
                     <div className="font-medium text-slate-100">{item.card?.name ?? `Card #${item.card_id}`}</div>
-                    <div className="text-xs text-slate-500">
-                      {[item.card?.set_name, item.card?.card_number].filter(Boolean).join(" · ") || "-"}
+                    <div className="mt-1 text-xs text-slate-500">
+                      {[item.card?.set_name, item.card?.card_number, item.card?.language].filter(Boolean).join(" · ") || "-"}
                     </div>
                   </td>
-                  <td className="px-4 py-3 text-slate-300">{item.copy_label ?? "-"}</td>
-                  <td className="px-4 py-3 text-slate-300">{item.status ?? "-"}</td>
-                  <td className="px-4 py-3 text-slate-300">{item.acquired_source ?? "-"}</td>
-                  <td className="px-4 py-3 text-slate-300">{formatHuf(item.acquired_price_huf)}</td>
-                  <td className="px-4 py-3 text-right">
+                  <td className="px-4 py-4 text-slate-300">{item.copy_label ?? "-"}</td>
+                  <td className="px-4 py-4">
+                    <span className="rounded-full border border-slate-700 bg-slate-950/40 px-2 py-1 text-xs text-slate-300">
+                      {item.status ?? "-"}
+                    </span>
+                  </td>
+                  <td className="px-4 py-4 text-slate-300">{item.acquired_source ?? "-"}</td>
+                  <td className="px-4 py-4 text-slate-300">{formatHuf(item.acquired_price_huf)}</td>
+                  <td className="px-4 py-4 text-right">
                     <button
-                      className="rounded-lg border border-blue-500/40 px-3 py-1.5 text-sm text-blue-200 hover:bg-blue-500/10"
+                      className="rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white shadow-sm shadow-blue-950/40 hover:bg-blue-400"
                       onClick={() => onOpenOwnedCard(item.id)}
                       type="button"
                     >

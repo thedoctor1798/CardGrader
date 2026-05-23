@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { Layout } from "./components/Layout";
 import { EmptyState } from "./components/EmptyState";
+import { Layout } from "./components/Layout";
 import { CardDetailPage } from "./pages/CardDetailPage";
 import { CollectionPage } from "./pages/CollectionPage";
 import { DashboardPage } from "./pages/DashboardPage";

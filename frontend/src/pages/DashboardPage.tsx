@@ -1,5 +1,5 @@
-import { Camera } from "lucide-react";
-import { useCallback, useEffect, useState } from "react";
+import { Camera, RefreshCw } from "lucide-react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api } from "../api/client";
 import type { CollectionSnapshot, CollectionSummary } from "../api/types";
@@ -16,6 +16,8 @@ export function DashboardPage() {
   const [message, setMessage] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
+
+  const latestSnapshot = useMemo(() => snapshots[snapshots.length - 1] ?? null, [snapshots]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -57,21 +59,35 @@ export function DashboardPage() {
   if (!summary) return <EmptyState label="Nincs elérhető összesítés." />;
 
   return (
-    <div className="space-y-5">
+    <div className="space-y-6">
       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
-          <h2 className="text-xl font-semibold text-slate-100">Dashboard</h2>
-          <p className="mt-1 text-sm text-slate-400">Élő, lokális összesítés a SQLite adatbázisból.</p>
+          <p className="text-xs font-semibold uppercase tracking-wide text-blue-300">Live summary</p>
+          <h2 className="mt-1 text-2xl font-semibold text-slate-50">Dashboard</h2>
+          <p className="mt-1 text-sm text-slate-400">
+            A felső kártyák élő adatot mutatnak, a grafikon pedig csak mentett snapshotokból épül.
+          </p>
         </div>
-        <button
-          className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white hover:bg-blue-400 disabled:opacity-60"
-          disabled={busy}
-          onClick={createSnapshot}
-          type="button"
-        >
-          <Camera size={16} />
-          Snapshot készítése
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button
+            className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
+            disabled={busy}
+            onClick={load}
+            type="button"
+          >
+            <RefreshCw size={16} />
+            Frissítés
+          </button>
+          <button
+            className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white hover:bg-blue-400 disabled:opacity-60"
+            disabled={busy}
+            onClick={createSnapshot}
+            type="button"
+          >
+            <Camera size={16} />
+            Snapshot készítése
+          </button>
+        </div>
       </div>
 
       {message && <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-200">{message}</div>}
@@ -88,43 +104,56 @@ export function DashboardPage() {
         <StatCard label="Kártyák száma" value={summary.total_cards} />
         <StatCard label="Egyedi kártyák" value={summary.unique_cards} />
         <StatCard
-          label="Hiányzó árak száma"
+          label="Hiányzó árak"
           value={summary.cards_missing_price_total}
           tone={summary.cards_missing_price_total > 0 ? "warn" : "good"}
         />
       </div>
 
-      <Panel title="Gyűjtemény érték trend" subtitle="A grafikon snapshotok alapján frissül.">
+      <Panel
+        title="Snapshot alapú értéktrend"
+        subtitle="A grafikon csak mentett snapshotok alapján változik."
+        action={
+          latestSnapshot ? (
+            <div className="rounded-full border border-slate-700 bg-slate-950/40 px-3 py-1 text-xs text-slate-300">
+              Utolsó snapshot: {formatDate(latestSnapshot.created_at)}
+            </div>
+          ) : null
+        }
+      >
         {snapshots.length === 0 ? (
           <EmptyState label="Még nincs gyűjtemény snapshot." />
         ) : (
-          <div className="h-80">
-            <ResponsiveContainer width="100%" height="100%">
-              <AreaChart data={snapshots}>
-                <defs>
-                  <linearGradient id="valueFill" x1="0" x2="0" y1="0" y2="1">
-                    <stop offset="5%" stopColor="#60a5fa" stopOpacity={0.45} />
-                    <stop offset="95%" stopColor="#60a5fa" stopOpacity={0.02} />
-                  </linearGradient>
-                </defs>
-                <CartesianGrid stroke="#1f2937" strokeDasharray="3 3" />
-                <XAxis dataKey="snapshot_date" tickFormatter={formatDate} stroke="#94a3b8" />
-                <YAxis stroke="#94a3b8" tickFormatter={(value) => `${Math.round(Number(value) / 1000)}k`} />
-                <Tooltip
-                  contentStyle={{ background: "#111722", border: "1px solid #334155", borderRadius: 8 }}
-                  formatter={(value) => formatHuf(Number(value))}
-                  labelFormatter={(value) => formatDate(String(value))}
-                />
-                <Area
-                  dataKey="collection_value_huf"
-                  fill="url(#valueFill)"
-                  name="Gyűjtemény érték"
-                  stroke="#60a5fa"
-                  strokeWidth={2}
-                  type="monotone"
-                />
-              </AreaChart>
-            </ResponsiveContainer>
+          <div className="space-y-3">
+            <div className="h-80">
+              <ResponsiveContainer width="100%" height="100%">
+                <AreaChart data={snapshots}>
+                  <defs>
+                    <linearGradient id="valueFill" x1="0" x2="0" y1="0" y2="1">
+                      <stop offset="5%" stopColor="#60a5fa" stopOpacity={0.45} />
+                      <stop offset="95%" stopColor="#60a5fa" stopOpacity={0.02} />
+                    </linearGradient>
+                  </defs>
+                  <CartesianGrid stroke="#1f2937" strokeDasharray="3 3" />
+                  <XAxis dataKey="snapshot_date" tickFormatter={formatDate} stroke="#94a3b8" />
+                  <YAxis stroke="#94a3b8" tickFormatter={(value) => `${Math.round(Number(value) / 1000)}k`} />
+                  <Tooltip
+                    contentStyle={{ background: "#111722", border: "1px solid #334155", borderRadius: 8 }}
+                    formatter={(value) => formatHuf(Number(value))}
+                    labelFormatter={(value) => formatDate(String(value))}
+                  />
+                  <Area
+                    dataKey="collection_value_huf"
+                    fill="url(#valueFill)"
+                    name="Gyűjtemény érték"
+                    stroke="#60a5fa"
+                    strokeWidth={2}
+                    type="monotone"
+                  />
+                </AreaChart>
+              </ResponsiveContainer>
+            </div>
+            <p className="text-xs text-slate-500">A grafikon csak mentett snapshotok alapján változik.</p>
           </div>
         )}
       </Panel>
