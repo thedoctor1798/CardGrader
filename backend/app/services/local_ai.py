@@ -14,7 +14,10 @@ from sqlmodel import Session, select
 
 from ..config import (
     LOCAL_AI_BASE_URL,
+    LOCAL_AI_DISABLE_THINKING,
     LOCAL_AI_ENABLED,
+    LOCAL_AI_MAX_IMAGES,
+    LOCAL_AI_MAX_TOKENS,
     LOCAL_AI_MODEL_NAME,
     LOCAL_AI_PROVIDER,
     LOCAL_AI_TIMEOUT_SECONDS,
@@ -66,6 +69,9 @@ def local_ai_config() -> dict[str, Any]:
         "base_url": LOCAL_AI_BASE_URL,
         "model_name": LOCAL_AI_MODEL_NAME,
         "timeout_seconds": LOCAL_AI_TIMEOUT_SECONDS,
+        "max_images": LOCAL_AI_MAX_IMAGES,
+        "max_tokens": LOCAL_AI_MAX_TOKENS,
+        "disable_thinking": LOCAL_AI_DISABLE_THINKING,
         "is_localhost": is_localhost_url(LOCAL_AI_BASE_URL),
     }
 
@@ -89,8 +95,19 @@ def http_json(method: str, url: str, body: dict[str, Any] | None = None) -> dict
     if body is not None:
         data = json.dumps(body).encode("utf-8")
     request = urllib.request.Request(url, data=data, method=method, headers=headers)
-    with urllib.request.urlopen(request, timeout=LOCAL_AI_TIMEOUT_SECONDS) as response:
-        return json.loads(response.read().decode("utf-8"))
+    try:
+        with urllib.request.urlopen(request, timeout=LOCAL_AI_TIMEOUT_SECONDS) as response:
+            return json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        body_text = exc.read().decode("utf-8", errors="replace")
+        raise LocalAIHTTPError(exc.code, body_text) from exc
+
+
+class LocalAIHTTPError(Exception):
+    def __init__(self, status_code: int, response_body: str):
+        self.status_code = status_code
+        self.response_body = response_body
+        super().__init__(f"Local AI HTTP {status_code}: {response_body[:500]}")
 
 
 def models_from_response(response: dict[str, Any]) -> list[str]:
@@ -113,6 +130,8 @@ def test_local_ai_connection() -> dict[str, Any]:
             "ok": False,
             "reachable": False,
             "models": [],
+            "selected_model": LOCAL_AI_MODEL_NAME,
+            "selected_model_found": False,
             "message": "Local AI is disabled.",
         }
     if not is_localhost_url(LOCAL_AI_BASE_URL):
@@ -122,22 +141,33 @@ def test_local_ai_connection() -> dict[str, Any]:
             "ok": False,
             "reachable": False,
             "models": [],
+            "selected_model": LOCAL_AI_MODEL_NAME,
+            "selected_model_found": False,
             "message": "Ollama provider not implemented yet.",
         }
     try:
         response = http_json("GET", f"{LOCAL_AI_BASE_URL.rstrip('/')}/models")
         models = models_from_response(response)
+        selected_model_found = LOCAL_AI_MODEL_NAME in models
         return {
-            "ok": True,
+            "ok": selected_model_found if LOCAL_AI_MODEL_NAME else True,
             "reachable": True,
             "models": models,
-            "message": "Local AI server is reachable.",
+            "selected_model": LOCAL_AI_MODEL_NAME,
+            "selected_model_found": selected_model_found,
+            "message": (
+                "Local AI server is reachable."
+                if selected_model_found or not LOCAL_AI_MODEL_NAME
+                else "Local AI server is reachable, but selected model is not loaded."
+            ),
         }
     except Exception as exc:
         return {
             "ok": False,
             "reachable": False,
             "models": [],
+            "selected_model": LOCAL_AI_MODEL_NAME,
+            "selected_model_found": False,
             "message": f"Local AI server is not reachable: {exc}",
         }
 
@@ -220,7 +250,7 @@ def collect_assets(session: Session, opencv_run_id: int) -> list[AnalysisAsset]:
             asset.created_at,
             asset.id or 0,
         ),
-    )[:1]
+    )[:LOCAL_AI_MAX_IMAGES]
 
 
 def selected_asset_labels(assets: list[AnalysisAsset]) -> list[str]:
@@ -249,11 +279,18 @@ def opencv_measurements(session: Session, opencv_run: AnalysisRun) -> dict[str, 
 
 
 def build_prompt(card: Card, measurements: dict[str, Any]) -> str:
-    return f"""You are a trading card condition analysis assistant.
+    no_thinking = (
+        "Do not think step by step. Do not output reasoning. Return only the final JSON object. "
+        "Start with { and end with }.\n\n"
+        if LOCAL_AI_DISABLE_THINKING
+        else ""
+    )
+    suffix = "\n\n/no_think" if LOCAL_AI_DISABLE_THINKING else ""
+    return f"""{no_thinking}You are a trading card condition analysis assistant.
 
 You analyze uploaded trading card images for visible condition issues. You are not an official grading company. You must not invent flaws. Only describe issues that are visible or explicitly mark them as uncertain.
 
-Return JSON only. Do not write markdown. Do not include explanations outside JSON.
+Return JSON only. Do not write markdown. Do not use code fences. Do not include prose. Do not output reasoning. Do not include explanations outside JSON. Start with {{ and end with }}.
 
 The card metadata:
 - name: {card.name}
@@ -316,17 +353,24 @@ Rules:
 - Do not mention external grading companies except in generic grading impact terms.
 - Be conservative with gem mint claims.
 - For tiny whitening, severity should be "very_minor" or "minor".
-- Use bbox only if you can approximate the location. If not, set x/y/width/height to 0."""
+- Use bbox only if you can approximate the location. If not, set x/y/width/height to 0.{suffix}"""
 
 
 def remove_trailing_commas(text: str) -> str:
     return re.sub(r",\s*([}\]])", r"\1", text)
 
 
-def extract_first_json_object(content: str) -> str:
-    text = content.strip()
-    text = re.sub(r"^```(?:json)?", "", text, flags=re.IGNORECASE).strip()
-    text = re.sub(r"```$", "", text).strip()
+def strip_markdown_fences(text: str) -> str:
+    text = text.strip()
+    text = re.sub(r"```(?:json)?", "", text, flags=re.IGNORECASE)
+    text = text.replace("```", "")
+    return text.strip()
+
+
+def extract_first_json_text(content: str) -> str:
+    if not content or not content.strip():
+        raise ValueError("Local AI response was empty.")
+    text = strip_markdown_fences(content)
     start = text.find("{")
     if start == -1:
         raise ValueError("Local AI response did not contain JSON.")
@@ -354,6 +398,11 @@ def extract_first_json_object(content: str) -> str:
             if depth == 0:
                 return text[start : index + 1]
     raise ValueError("Local AI response JSON object was incomplete.")
+
+
+def extract_first_json_object(text: str) -> dict[str, Any]:
+    json_text = remove_trailing_commas(extract_first_json_text(text))
+    return json.loads(json_text)
 
 
 def normalize_confidence(value: Any) -> float | None:
@@ -452,21 +501,68 @@ def normalize_local_ai_data(data: dict[str, Any]) -> dict[str, Any]:
 
 
 def parse_json_response(content: str) -> dict[str, Any]:
-    json_text = remove_trailing_commas(extract_first_json_object(content))
-    return normalize_local_ai_data(json.loads(json_text))
+    return normalize_local_ai_data(extract_first_json_object(content))
 
 
-def call_openai_compatible(prompt: str, assets: list[AnalysisAsset]) -> str:
+def content_from_chat_response(response: dict[str, Any]) -> tuple[str, bool]:
+    message = response.get("choices", [{}])[0].get("message", {})
+    content = message.get("content") or ""
+    if content.strip():
+        return content, False
+    reasoning_content = message.get("reasoning_content") or ""
+    if reasoning_content.strip():
+        return reasoning_content, True
+    return "", False
+
+
+def reasoning_content_from_response(response: dict[str, Any]) -> str:
+    message = response.get("choices", [{}])[0].get("message", {})
+    return message.get("reasoning_content") or ""
+
+
+def call_openai_compatible(prompt: str, assets: list[AnalysisAsset]) -> tuple[str, str, bool]:
     messages_content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
     messages_content.extend(data_url_for_asset(asset) for asset in assets)
     payload = {
         "model": LOCAL_AI_MODEL_NAME,
         "messages": [{"role": "user", "content": messages_content}],
-        "temperature": 0.1,
-        "response_format": {"type": "json_object"},
+        "temperature": 0,
+        "max_tokens": LOCAL_AI_MAX_TOKENS,
     }
     response = http_json("POST", f"{LOCAL_AI_BASE_URL.rstrip('/')}/chat/completions", payload)
-    return response["choices"][0]["message"]["content"]
+    content, parsed_from_reasoning_content = content_from_chat_response(response)
+    return content, json.dumps(response, ensure_ascii=False, indent=2), parsed_from_reasoning_content
+
+
+def call_text_only_repair(raw_output: str) -> tuple[str, str]:
+    prompt = (
+        "Convert the following model output into the required JSON schema. Return JSON only. "
+        "Start with { and end with }.\n\n"
+        f"{raw_output}"
+    )
+    payload = {
+        "model": LOCAL_AI_MODEL_NAME,
+        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+        "temperature": 0,
+        "max_tokens": LOCAL_AI_MAX_TOKENS,
+    }
+    response = http_json("POST", f"{LOCAL_AI_BASE_URL.rstrip('/')}/chat/completions", payload)
+    content, _ = content_from_chat_response(response)
+    return content, json.dumps(response, ensure_ascii=False, indent=2)
+
+
+def parse_with_optional_repair(session: Session, analysis_run_id: int, content: str) -> tuple[dict[str, Any], str, bool]:
+    try:
+        extracted = extract_first_json_text(content)
+        if extracted.strip() != strip_markdown_fences(content).strip():
+            save_extracted_text(session, analysis_run_id, extracted)
+        return normalize_local_ai_data(json.loads(remove_trailing_commas(extracted))), extracted, False
+    except (json.JSONDecodeError, ValueError):
+        repair_content, repair_raw = call_text_only_repair(content)
+        save_repair_response(session, analysis_run_id, repair_raw)
+        extracted = extract_first_json_text(repair_content)
+        save_extracted_text(session, analysis_run_id, extracted)
+        return normalize_local_ai_data(json.loads(remove_trailing_commas(extracted))), extracted, True
 
 
 def save_text_asset(
@@ -514,6 +610,39 @@ def save_debug_artifacts(session: Session, analysis_run_id: int, raw_response: s
         )
 
 
+def save_extracted_text(session: Session, analysis_run_id: int, content: str) -> AnalysisAsset:
+    return save_text_asset(
+        session,
+        analysis_run_id,
+        "local_ai_extracted_text",
+        "local_ai_extracted_text",
+        "local_ai_extracted_text.txt",
+        content,
+    )
+
+
+def save_error_response(session: Session, analysis_run_id: int, content: str) -> AnalysisAsset:
+    return save_text_asset(
+        session,
+        analysis_run_id,
+        "local_ai_error_response",
+        "local_ai_error_response",
+        "local_ai_error_response.txt",
+        content,
+    )
+
+
+def save_repair_response(session: Session, analysis_run_id: int, content: str) -> AnalysisAsset:
+    return save_text_asset(
+        session,
+        analysis_run_id,
+        "local_ai_repair_response",
+        "local_ai_repair_response",
+        "local_ai_repair_response.txt",
+        content,
+    )
+
+
 def save_findings(session: Session, analysis_run: AnalysisRun, data: dict[str, Any]) -> None:
     for item in data.get("findings", []):
         bbox = item.get("bbox") or {}
@@ -555,8 +684,117 @@ def dry_run_local_ai(session: Session, owned_card_id: int) -> dict[str, Any]:
         "opencv_analysis_run_id": opencv_run.id,
         "images_would_send": len(assets),
         "image_labels_would_send": selected_asset_labels(assets),
+        "selected_asset_file_paths": [asset.file_path for asset in assets],
+        "max_images": LOCAL_AI_MAX_IMAGES,
+        "max_tokens": LOCAL_AI_MAX_TOKENS,
+        "model_name": LOCAL_AI_MODEL_NAME,
+        "base_url": LOCAL_AI_BASE_URL,
         "prompt_preview": prompt,
     }
+
+
+def choose_single_debug_asset(assets: list[AnalysisAsset]) -> AnalysisAsset:
+    return next((asset for asset in assets if asset.label == "front_resized"), assets[0])
+
+
+def local_ai_debug_single_image(session: Session, owned_card_id: int) -> dict[str, Any]:
+    owned_card = session.get(OwnedCard, owned_card_id)
+    if owned_card is None:
+        raise HTTPException(status_code=404, detail="Owned card not found")
+    require_local_ai_enabled()
+
+    opencv_run = latest_completed_opencv_run(session, owned_card_id)
+    if opencv_run is None:
+        raise HTTPException(status_code=400, detail="Run OpenCV analysis before local AI analysis.")
+    assets = collect_assets(session, opencv_run.id)
+    if not assets:
+        raise HTTPException(status_code=400, detail="No OpenCV assets found for local AI analysis.")
+    asset = choose_single_debug_asset(assets)
+
+    analysis_run = AnalysisRun(
+        owned_card_id=owned_card_id,
+        mode="local_ai_debug_single_image",
+        status="running",
+        model_provider=LOCAL_AI_PROVIDER,
+        model_name=LOCAL_AI_MODEL_NAME,
+        prompt_version="local_vision_debug_v1",
+        analysis_version="local_ai_debug_single_image_v1",
+    )
+    session.add(analysis_run)
+    session.commit()
+    session.refresh(analysis_run)
+
+    prompt = 'Return JSON only: {"ok": true, "summary": "string"}'
+    if LOCAL_AI_DISABLE_THINKING:
+        prompt = (
+            "Do not think step by step. Do not output reasoning. Return only JSON. Start with { and end with }.\n"
+            f"{prompt}\n/no_think"
+        )
+    payload = {
+        "model": LOCAL_AI_MODEL_NAME,
+        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}, data_url_for_asset(asset)]}],
+        "temperature": 0,
+        "max_tokens": LOCAL_AI_MAX_TOKENS,
+    }
+    try:
+        response = http_json("POST", f"{LOCAL_AI_BASE_URL.rstrip('/')}/chat/completions", payload)
+        message = response.get("choices", [{}])[0].get("message", {})
+        content = message.get("content") or ""
+        reasoning_content = message.get("reasoning_content") or ""
+        finish_reason = response.get("choices", [{}])[0].get("finish_reason")
+        saved = save_text_asset(
+            session,
+            analysis_run.id,
+            "local_ai_debug_single_image_response",
+            "local_ai_debug_single_image_response",
+            "local_ai_debug_single_image_response.txt",
+            json.dumps(response, ensure_ascii=False, indent=2),
+        )
+        analysis_run.status = "completed"
+        analysis_run.completed_at = datetime.utcnow()
+        session.add(analysis_run)
+        session.commit()
+        parsed_json = None
+        parsed_json_success = False
+        error_message = None
+        try:
+            parsed_json = extract_first_json_object(content or reasoning_content)
+            parsed_json_success = True
+        except Exception as exc:
+            error_message = str(exc)
+        return {
+            "status": "completed",
+            "model": LOCAL_AI_MODEL_NAME,
+            "image_label_sent": asset.label,
+            "finish_reason": finish_reason,
+            "content": content,
+            "reasoning_content_present": bool(reasoning_content),
+            "reasoning_content_preview": reasoning_content[:1000],
+            "parsed_json_success": parsed_json_success,
+            "parsed_json": parsed_json,
+            "error_message": error_message,
+            "raw_response_asset": saved,
+        }
+    except LocalAIHTTPError as exc:
+        saved = save_error_response(session, analysis_run.id, f"HTTP {exc.status_code}\n\n{exc.response_body}")
+        analysis_run.status = "failed"
+        analysis_run.error_message = "LM Studio returned an error. Details saved locally."
+        analysis_run.completed_at = datetime.utcnow()
+        session.add(analysis_run)
+        session.commit()
+        return {
+            "status": "failed",
+            "model": LOCAL_AI_MODEL_NAME,
+            "image_label_sent": asset.label,
+            "finish_reason": None,
+            "content": "LM Studio hibát adott vissza. Részletek a lokális debug fájlban.",
+            "reasoning_content_present": False,
+            "reasoning_content_preview": "",
+            "parsed_json_success": False,
+            "parsed_json": None,
+            "error_message": str(exc),
+            "raw_response_asset": saved,
+        }
 
 
 def run_local_ai_fast(session: Session, owned_card_id: int) -> dict[str, Any]:
@@ -592,10 +830,27 @@ def run_local_ai_fast(session: Session, owned_card_id: int) -> dict[str, Any]:
     raw_response = ""
     parsed_data: dict[str, Any] | None = None
     try:
-        raw_response = call_openai_compatible(build_prompt(card, opencv_measurements(session, opencv_run)), assets)
-        data = parse_json_response(raw_response)
+        raw_response, full_response, parsed_from_reasoning_content = call_openai_compatible(
+            build_prompt(card, opencv_measurements(session, opencv_run)),
+            assets,
+        )
+        if not raw_response.strip():
+            save_debug_artifacts(session, analysis_run.id, full_response, None)
+            raise ValueError("Local AI returned empty content. Try increasing LOCAL_AI_MAX_TOKENS or use a different vision model.")
+        if parsed_from_reasoning_content:
+            try:
+                extracted = extract_first_json_text(raw_response)
+                save_extracted_text(session, analysis_run.id, extracted)
+                data = normalize_local_ai_data(json.loads(remove_trailing_commas(extracted)))
+            except Exception as exc:
+                save_debug_artifacts(session, analysis_run.id, full_response, None)
+                raise ValueError("Local AI returned reasoning-only output without final JSON.") from exc
+        else:
+            data, _, repaired = parse_with_optional_repair(session, analysis_run.id, raw_response)
+            data["repaired_from_non_json_output"] = repaired
+        data["parsed_from_reasoning_content"] = parsed_from_reasoning_content
         parsed_data = data
-        save_debug_artifacts(session, analysis_run.id, raw_response, parsed_data)
+        save_debug_artifacts(session, analysis_run.id, full_response, parsed_data)
         save_findings(session, analysis_run, data)
         analysis_run.status = "completed"
         analysis_run.human_summary = data.get("overall_visual_condition")
@@ -624,15 +879,35 @@ def run_local_ai_fast(session: Session, owned_card_id: int) -> dict[str, Any]:
             "status": analysis_run.status,
         }
     except (json.JSONDecodeError, ValueError) as exc:
-        if raw_response:
+        if raw_response and parsed_data is None:
             save_debug_artifacts(session, analysis_run.id, raw_response, parsed_data)
         analysis_run.status = "failed"
-        analysis_run.error_message = f"Local AI response could not be parsed as JSON. {raw_response[:2000]}"
+        if "reasoning-only" in str(exc):
+            analysis_run.error_message = "Local AI returned reasoning-only output without final JSON."
+        elif "empty content" in str(exc):
+            analysis_run.error_message = str(exc)
+        else:
+            analysis_run.error_message = f"Local AI response could not be parsed as JSON. {raw_response[:2000]}"
         analysis_run.completed_at = datetime.utcnow()
         session.add(analysis_run)
         session.commit()
         session.refresh(analysis_run)
-        raise HTTPException(status_code=502, detail="Local AI response could not be parsed as JSON.") from exc
+        if "reasoning-only" in str(exc):
+            detail = "Local AI returned reasoning-only output without final JSON."
+        elif "empty content" in str(exc):
+            detail = str(exc)
+        else:
+            detail = "A lokális modell válasza nem volt feldolgozható JSON. A debug fájlok a media/reports mappában találhatók."
+        raise HTTPException(status_code=502, detail=detail) from exc
+    except LocalAIHTTPError as exc:
+        save_error_response(session, analysis_run.id, f"HTTP {exc.status_code}\n\n{exc.response_body}")
+        analysis_run.status = "failed"
+        analysis_run.error_message = "LM Studio returned an error. Details saved locally."
+        analysis_run.completed_at = datetime.utcnow()
+        session.add(analysis_run)
+        session.commit()
+        session.refresh(analysis_run)
+        raise HTTPException(status_code=502, detail="LM Studio hibát adott vissza. Részletek a lokális debug fájlban.") from exc
     except Exception as exc:
         analysis_run.status = "failed"
         analysis_run.error_message = str(exc)

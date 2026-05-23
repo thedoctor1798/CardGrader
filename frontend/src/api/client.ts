@@ -13,6 +13,7 @@ import type {
   LocalAIStatus,
   LocalAIAnalysisResponse,
   LocalAIConfig,
+  LocalAIDebugSingleImageResponse,
   LocalAIDryRun,
   LocalAITestConnection,
   OwnedCard,
@@ -95,6 +96,8 @@ export const api = {
     request<LocalAIAnalysisResponse>(`/api/owned-cards/${ownedCardId}/analyze/local-ai-fast`, { method: "POST" }),
   runLocalAIDryRun: (ownedCardId: number) =>
     request<LocalAIDryRun>(`/api/owned-cards/${ownedCardId}/analyze/local-ai-dry-run`, { method: "POST" }),
+  runLocalAIDebugSingleImage: (ownedCardId: number) =>
+    request<LocalAIDebugSingleImageResponse>(`/api/owned-cards/${ownedCardId}/analyze/local-ai-debug-single-image`, { method: "POST" }),
   scoreAnalysisRun: (analysisRunId: number) =>
     request<AnalysisRun>(`/api/analysis-runs/${analysisRunId}/score`, { method: "POST" }),
   annotateAnalysisRun: (analysisRunId: number) =>

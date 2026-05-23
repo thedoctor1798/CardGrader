@@ -119,12 +119,22 @@ export function SettingsPage() {
             <StatCard label="Base URL" value={localAI.base_url} />
             <StatCard label="Model" value={localAI.model_name || "-"} />
             <StatCard label="Timeout" value={`${localAIConfig?.timeout_seconds ?? "-"}s`} />
+            <StatCard label="Max images" value={localAIConfig?.max_images ?? "-"} />
+            <StatCard label="Max tokens" value={localAIConfig?.max_tokens ?? "-"} />
+            <StatCard label="Disable thinking" value={localAIConfig?.disable_thinking ? "igen" : "nem"} tone={localAIConfig?.disable_thinking ? "good" : "warn"} />
             <StatCard label="Localhost" value={localAI.is_localhost ? "igen" : "nem"} tone={localAI.is_localhost ? "good" : "bad"} />
             <StatCard label="Reachable" value={localAI.reachable ? "igen" : "nem"} tone={localAI.reachable ? "good" : "warn"} />
             <StatCard label="Vision" value={localAI.vision_capable} />
           </div>
           <p className="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-sm text-slate-300">{localAI.message}</p>
           <p className="mt-3 text-sm text-slate-400">Az értékeket jelenleg .env fájlban kell beállítani, majd a backendet újraindítani.</p>
+          <p className="mt-2 text-sm text-slate-400">
+            A modellváltáshoz módosítsd a backend/.env LOCAL_AI_MODEL_NAME értékét a /v1/models listában látott pontos model id-re,
+            majd indítsd újra a backendet.
+          </p>
+          <p className="mt-2 text-sm text-slate-400">
+            Qwen modelleknél LM Studio-ban kapcsold ki az Enable Thinking opciót, vagy használd a LOCAL_AI_DISABLE_THINKING=true beállítást.
+          </p>
           <div className="mt-4 flex flex-wrap gap-3">
             <button
               className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/10 px-4 py-2 text-sm font-medium text-blue-100 hover:bg-blue-500/20 disabled:opacity-60"
@@ -143,7 +153,16 @@ export function SettingsPage() {
             <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-sm text-slate-300">
               <div className="font-medium text-slate-100">Kapcsolat teszt: {connectionTest.ok ? "OK" : "nem OK"}</div>
               <div className="mt-1">Reachable: {connectionTest.reachable ? "igen" : "nem"}</div>
+              <div className="mt-1">Selected model: {connectionTest.selected_model || "-"}</div>
+              <div className={connectionTest.selected_model_found ? "mt-1 text-emerald-200" : "mt-1 text-amber-200"}>
+                Selected model loaded: {connectionTest.selected_model_found ? "igen" : "nem"}
+              </div>
               <div className="mt-1">{connectionTest.message}</div>
+              {!connectionTest.selected_model_found && connectionTest.reachable && (
+                <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-amber-100">
+                  A beállított modell nincs a LM Studio model listában. Másold ki a pontos id-t a listából, írd be a backend/.env fájlba, majd indítsd újra a backendet.
+                </div>
+              )}
               <div className="mt-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Modellek</div>
               {connectionTest.models.length === 0 ? (
                 <div className="mt-1 text-slate-500">Nincs modell lista.</div>

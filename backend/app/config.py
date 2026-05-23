@@ -42,8 +42,15 @@ def get_int_env(name: str, default: int) -> int:
         return default
 
 
+def get_clamped_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
+    return max(minimum, min(maximum, get_int_env(name, default)))
+
+
 LOCAL_AI_ENABLED = get_bool_env("LOCAL_AI_ENABLED", False)
 LOCAL_AI_PROVIDER = os.getenv("LOCAL_AI_PROVIDER", "lmstudio")
 LOCAL_AI_BASE_URL = os.getenv("LOCAL_AI_BASE_URL", "http://127.0.0.1:1234/v1")
 LOCAL_AI_MODEL_NAME = os.getenv("LOCAL_AI_MODEL_NAME", "")
 LOCAL_AI_TIMEOUT_SECONDS = get_int_env("LOCAL_AI_TIMEOUT_SECONDS", 120)
+LOCAL_AI_MAX_IMAGES = get_clamped_int_env("LOCAL_AI_MAX_IMAGES", 1, 1, 10)
+LOCAL_AI_MAX_TOKENS = get_clamped_int_env("LOCAL_AI_MAX_TOKENS", 4096, 300, 8192)
+LOCAL_AI_DISABLE_THINKING = get_bool_env("LOCAL_AI_DISABLE_THINKING", True)

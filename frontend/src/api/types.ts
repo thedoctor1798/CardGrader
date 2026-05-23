@@ -243,6 +243,9 @@ export type LocalAIConfig = {
   base_url: string;
   model_name?: string | null;
   timeout_seconds: number;
+  max_images: number;
+  max_tokens: number;
+  disable_thinking: boolean;
   is_localhost: boolean;
 };
 
@@ -250,6 +253,8 @@ export type LocalAITestConnection = {
   ok: boolean;
   reachable: boolean;
   models: string[];
+  selected_model?: string | null;
+  selected_model_found: boolean;
   message: string;
 };
 
@@ -264,9 +269,28 @@ export type LocalAIAnalysisResponse = {
 export type LocalAIDryRun = {
   config: LocalAIConfig;
   opencv_analysis_run_id: number;
+  max_images: number;
+  max_tokens: number;
   images_would_send: number;
   image_labels_would_send: string[];
+  selected_asset_file_paths: string[];
+  model_name: string;
+  base_url: string;
   prompt_preview: string;
+};
+
+export type LocalAIDebugSingleImageResponse = {
+  status: string;
+  model: string;
+  image_label_sent?: string | null;
+  finish_reason?: string | null;
+  content: string;
+  reasoning_content_present: boolean;
+  reasoning_content_preview?: string | null;
+  parsed_json_success: boolean;
+  parsed_json?: unknown;
+  error_message?: string | null;
+  raw_response_asset?: AnalysisAsset | null;
 };
 
 export type AnnotationResponse = {

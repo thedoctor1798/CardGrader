@@ -10,6 +10,7 @@ import type {
   Card,
   CardMedia,
   LocalAIDryRun,
+  LocalAIDebugSingleImageResponse,
   LocalAIStatus,
   OwnedCard,
   PriceObservation,
@@ -130,6 +131,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const [findings, setFindings] = useState<AnalysisFinding[]>([]);
   const [localAI, setLocalAI] = useState<LocalAIStatus | null>(null);
   const [localAIDryRun, setLocalAIDryRun] = useState<LocalAIDryRun | null>(null);
+  const [localAIDebug, setLocalAIDebug] = useState<LocalAIDebugSingleImageResponse | null>(null);
   const [report, setReport] = useState<AnalysisReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
@@ -374,7 +376,14 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
       setMessage(`Local AI elemzés elkészült. Findingok: ${aiResult.finding_count}.`);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Local AI elemzési hiba");
+      const detail = err instanceof Error ? err.message : "Local AI elemzési hiba";
+      if (detail.includes("reasoning-only")) {
+        setError("A lokális Qwen modell csak reasoning tartalmat adott vissza végleges JSON nélkül. Kapcsold ki a thinking módot (/no_think), vagy növeld a max token értéket.");
+      } else if (detail.includes("JSON")) {
+        setError("A lokális modell válasza nem volt feldolgozható JSON. A debug fájlok a media/reports mappában találhatók.");
+      } else {
+        setError(detail);
+      }
     } finally {
       setBusyLabel(null);
     }
@@ -394,6 +403,25 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Local AI dry-run hiba");
+    } finally {
+      setBusyLabel(null);
+    }
+  };
+
+  const runLocalAIDebugSingleImage = async () => {
+    if (localAIBlockedReason) {
+      setError(localAIBlockedReason);
+      return;
+    }
+    setBusyLabel("Local AI single-image debug...");
+    setMessage(null);
+    try {
+      const result = await api.runLocalAIDebugSingleImage(ownedCardId);
+      setLocalAIDebug(result);
+      setMessage(`Single-image debug: ${result.status}.`);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Local AI single-image debug hiba");
     } finally {
       setBusyLabel(null);
     }
@@ -530,7 +558,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
 
         <div className="space-y-4">
           <Panel title="Képi elemzés" subtitle="OpenCV előfeldolgozás és localhost-only Local AI opcionális elemzés.">
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-4">
               <button className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-60" disabled={busy} onClick={runAnalysis} type="button">
                 <Play size={16} /> {busyLabel === "Elemzés fut..." ? "Elemzés fut..." : "OpenCV elemzés indítása"}
               </button>
@@ -539,6 +567,9 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
               </button>
               <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-600 px-3 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800/50 disabled:opacity-50" disabled={busy || !latestOpenCvAnalysis} onClick={runLocalAIDryRun} type="button">
                 Local AI dry-run
+              </button>
+              <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-amber-500/40 px-3 py-2 text-sm font-medium text-amber-200 hover:bg-amber-500/10 disabled:opacity-50" disabled={busy || Boolean(localAIBlockedReason)} onClick={runLocalAIDebugSingleImage} type="button">
+                Local AI single-image debug
               </button>
             </div>
             {localAIBlockedReason && <p className="mt-3 text-sm text-amber-200">{localAIBlockedReason}</p>}
@@ -556,6 +587,8 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
               <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-sm text-slate-300">
                 <div className="font-medium text-slate-100">Local AI dry-run</div>
                 <div className="mt-1">Images: {localAIDryRun.images_would_send}</div>
+                <div className="mt-1">Max images: {localAIDryRun.max_images} · Max tokens: {localAIDryRun.max_tokens}</div>
+                <div className="mt-1">Model: {localAIDryRun.model_name}</div>
                 <div className="mt-2 flex flex-wrap gap-2">
                   {localAIDryRun.image_labels_would_send.map((label) => (
                     <span key={label} className="rounded-full border border-slate-700 px-2 py-0.5 text-xs text-slate-300">{label}</span>
@@ -565,6 +598,32 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                   <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-500">Prompt preview</summary>
                   <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded bg-slate-950 p-3 text-xs text-slate-300">{localAIDryRun.prompt_preview}</pre>
                 </details>
+              </div>
+            )}
+            {localAIDebug && (
+              <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
+                <div className="font-medium">Local AI single-image debug: {localAIDebug.status}</div>
+                <div className="mt-1">Model: {localAIDebug.model}</div>
+                <div className="mt-1">Image: {localAIDebug.image_label_sent ?? "-"}</div>
+                <div className="mt-1">Finish reason: {localAIDebug.finish_reason ?? "-"}</div>
+                <div className="mt-1">Reasoning content: {localAIDebug.reasoning_content_present ? "igen" : "nem"}</div>
+                <div className={localAIDebug.parsed_json_success ? "mt-1 text-emerald-200" : "mt-1 text-rose-200"}>
+                  Parsed JSON: {localAIDebug.parsed_json_success ? "sikeres" : "sikertelen"}
+                </div>
+                {localAIDebug.error_message && <div className="mt-1 text-rose-200">{localAIDebug.error_message}</div>}
+                <pre className="mt-3 max-h-64 overflow-auto whitespace-pre-wrap rounded bg-slate-950/70 p-3 text-xs text-slate-200">{localAIDebug.content}</pre>
+                {localAIDebug.reasoning_content_preview && (
+                  <details className="mt-3">
+                    <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-amber-200">Reasoning preview</summary>
+                    <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-slate-950/70 p-3 text-xs text-slate-200">{localAIDebug.reasoning_content_preview}</pre>
+                  </details>
+                )}
+                {localAIDebug.parsed_json_success && (
+                  <details className="mt-3">
+                    <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-emerald-200">Parsed JSON</summary>
+                    <pre className="mt-2 max-h-48 overflow-auto whitespace-pre-wrap rounded bg-slate-950/70 p-3 text-xs text-slate-200">{JSON.stringify(localAIDebug.parsed_json, null, 2)}</pre>
+                  </details>
+                )}
               </div>
             )}
           </Panel>

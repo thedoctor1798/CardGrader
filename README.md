@@ -192,6 +192,9 @@ $env:LOCAL_AI_PROVIDER="lmstudio"
 $env:LOCAL_AI_BASE_URL="http://127.0.0.1:1234/v1"
 $env:LOCAL_AI_MODEL_NAME="<your-local-vision-model>"
 $env:LOCAL_AI_TIMEOUT_SECONDS="120"
+$env:LOCAL_AI_MAX_IMAGES="1"
+$env:LOCAL_AI_MAX_TOKENS="4096"
+$env:LOCAL_AI_DISABLE_THINKING="true"
 .\start_cardgrader.bat
 ```
 
@@ -219,6 +222,7 @@ Invoke-RestMethod -Method Get -Uri http://127.0.0.1:8710/api/local-ai/status
 Invoke-RestMethod -Method Get -Uri http://127.0.0.1:8710/api/local-ai/config
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8710/api/local-ai/test-connection
 Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8710/api/owned-cards/1/analyze/local-ai-dry-run
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8710/api/owned-cards/1/analyze/local-ai-debug-single-image
 ```
 
 Local AI debug files are saved under:
@@ -235,6 +239,46 @@ Local AI troubleshooting:
 - If the model is missing, copy the exact model id/name from LM Studio or `/models`.
 - If JSON parsing fails, inspect `local_ai_raw_response.txt` under `media/reports`.
 - Only localhost model servers are allowed. Remote API hosts, LAN IPs, public IPs, and domain names are rejected.
+
+Recommended LM Studio Qwen settings:
+
+- Enable Thinking: OFF
+- Preserve Thinking: OFF
+- Temperature: `0` or `0.1`
+- Limit Response Length: OFF
+- Structured Output: OFF for now
+- Use `LOCAL_AI_DISABLE_THINKING=true` so CardGrader adds `/no_think` to the prompt.
+
+Do not rely on LM Studio Structured Output yet; CardGrader keeps backend parsing robust locally.
+
+## Switching LM Studio Models
+
+1. Download/load the new model in LM Studio.
+2. Verify the exact model id:
+
+```powershell
+Invoke-RestMethod -Method Get -Uri http://127.0.0.1:1234/v1/models
+```
+
+3. Copy the exact `id`, for example `qwen/qwen3.6-27b`.
+4. Edit `backend/.env`:
+
+```text
+LOCAL_AI_MODEL_NAME=qwen/qwen3.6-27b
+LOCAL_AI_MAX_IMAGES=1
+LOCAL_AI_MAX_TOKENS=4096
+LOCAL_AI_DISABLE_THINKING=true
+```
+
+5. Restart the backend.
+6. Test config and connection:
+
+```powershell
+Invoke-RestMethod -Method Get -Uri http://127.0.0.1:8710/api/local-ai/config
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8710/api/local-ai/test-connection
+```
+
+7. Run single-image debug before full Local AI analysis.
 
 ## Local Files
 
