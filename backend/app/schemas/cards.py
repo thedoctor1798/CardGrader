@@ -19,6 +19,17 @@ class CardCreate(CardBase):
     pass
 
 
+class CardUpdate(SQLModel):
+    name: Optional[str] = None
+    set_name: Optional[str] = None
+    set_code: Optional[str] = None
+    card_number: Optional[str] = None
+    language: Optional[str] = None
+    rarity: Optional[str] = None
+    variant: Optional[str] = None
+    notes: Optional[str] = None
+
+
 class CardRead(CardBase):
     id: int
     created_at: datetime
@@ -38,6 +49,17 @@ class OwnedCardBase(SQLModel):
 
 class OwnedCardCreate(OwnedCardBase):
     pass
+
+
+class OwnedCardUpdate(SQLModel):
+    card_id: Optional[int] = None
+    copy_label: Optional[str] = None
+    status: Optional[str] = None
+    acquired_at: Optional[date] = None
+    acquired_price_huf: Optional[int] = None
+    acquired_source: Optional[str] = None
+    storage_location: Optional[str] = None
+    personal_notes: Optional[str] = None
 
 
 class OwnedCardRead(OwnedCardBase):

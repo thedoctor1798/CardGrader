@@ -63,7 +63,15 @@ export const api = {
   createCollectionSnapshot: () => request<CollectionSnapshot>("/api/collection/snapshot", { method: "POST" }),
   getOwnedCards: () => request<OwnedCard[]>("/api/owned-cards"),
   getOwnedCard: (id: number) => request<OwnedCard>(`/api/owned-cards/${id}`),
+  createOwnedCard: (body: Partial<OwnedCard>) =>
+    request<OwnedCard>("/api/owned-cards", { method: "POST", body: JSON.stringify(body) }),
+  updateOwnedCard: (id: number, body: Partial<OwnedCard>) =>
+    request<OwnedCard>(`/api/owned-cards/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  getCards: () => request<Card[]>("/api/cards"),
   getCard: (id: number) => request<Card>(`/api/cards/${id}`),
+  createCard: (body: Partial<Card>) => request<Card>("/api/cards", { method: "POST", body: JSON.stringify(body) }),
+  updateCard: (id: number, body: Partial<Card>) =>
+    request<Card>(`/api/cards/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
   seedRowlet: () => request<DemoSeedResponse>("/api/demo/seed-rowlet", { method: "POST" }),
   resetLocalData: () => request<ResetLocalDataResponse>("/api/demo/reset-local-data", { method: "POST" }),
   cleanupGeneratedMedia: () => request<CleanupGeneratedMediaResponse>("/api/demo/cleanup-generated-media", { method: "POST" }),

@@ -32,6 +32,8 @@ const mediaLabels = [
   "edge_bottom",
   "edge_left",
 ];
+const statuses = ["raw_owned", "graded_owned", "sent_to_grading", "listed_for_sale", "sold", "kept_long_term"];
+const sources = ["pack", "blister", "single_purchase", "trade", "unknown"];
 
 type CardDetailPageProps = {
   ownedCardId: number;
@@ -46,6 +48,15 @@ type PriceForm = {
   notes: string;
 };
 
+type OwnedEditForm = {
+  copy_label: string;
+  status: string;
+  acquired_price_huf: string;
+  acquired_source: string;
+  storage_location: string;
+  personal_notes: string;
+};
+
 const emptyPriceForm: PriceForm = {
   raw_price_huf: "",
   psa_8_price_huf: "",
@@ -54,6 +65,17 @@ const emptyPriceForm: PriceForm = {
   price_confidence: "0.5",
   notes: "",
 };
+
+function editFormFromOwnedCard(ownedCard: OwnedCard | null): OwnedEditForm {
+  return {
+    copy_label: ownedCard?.copy_label ?? "",
+    status: ownedCard?.status ?? "raw_owned",
+    acquired_price_huf: ownedCard?.acquired_price_huf?.toString() ?? "",
+    acquired_source: ownedCard?.acquired_source ?? "unknown",
+    storage_location: ownedCard?.storage_location ?? "",
+    personal_notes: ownedCard?.personal_notes ?? "",
+  };
+}
 
 function formFromPrice(price: PriceObservation | null): PriceForm {
   if (!price) return emptyPriceForm;
@@ -116,6 +138,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const [uploadLabel, setUploadLabel] = useState("front");
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [priceForm, setPriceForm] = useState<PriceForm>(emptyPriceForm);
+  const [ownedEditForm, setOwnedEditForm] = useState<OwnedEditForm>(editFormFromOwnedCard(null));
   const [previewAsset, setPreviewAsset] = useState<AnalysisAsset | CardMedia | null>(null);
 
   const busy = busyLabel !== null;
@@ -154,6 +177,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
     try {
       const owned = await api.getOwnedCard(ownedCardId);
       setOwnedCard(owned);
+      setOwnedEditForm(editFormFromOwnedCard(owned));
       const [cardData, mediaData, runsData] = await Promise.all([
         api.getCard(owned.card_id),
         api.getOwnedCardMedia(ownedCardId),
@@ -249,6 +273,51 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
     }
   };
 
+  const saveOwnedCardBasics = async (event: FormEvent) => {
+    event.preventDefault();
+    if (!ownedCard) return;
+    setBusyLabel("Adatok mentese...");
+    setMessage(null);
+    try {
+      const updated = await api.updateOwnedCard(ownedCard.id, {
+        copy_label: ownedEditForm.copy_label.trim() || null,
+        status: ownedEditForm.status,
+        acquired_price_huf: optionalNumber(ownedEditForm.acquired_price_huf),
+        acquired_source: ownedEditForm.acquired_source,
+        storage_location: ownedEditForm.storage_location.trim() || null,
+        personal_notes: ownedEditForm.personal_notes.trim() || null,
+      });
+      setOwnedCard(updated);
+      setOwnedEditForm(editFormFromOwnedCard(updated));
+      setMessage("Adatok mentve.");
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Adatmentesi hiba");
+    } finally {
+      setBusyLabel(null);
+    }
+  };
+
+  const addCopyOfCurrentCard = async () => {
+    if (!ownedCard) return;
+    setBusyLabel("Uj peldany letrehozasa...");
+    setMessage(null);
+    try {
+      const copy = await api.createOwnedCard({
+        card_id: ownedCard.card_id,
+        copy_label: `${card?.name ?? "Card"} uj peldany`,
+        status: "raw_owned",
+        acquired_source: "unknown",
+      });
+      setMessage("Uj peldany hozzaadva.");
+      window.location.hash = `#/owned-cards/${copy.id}`;
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Uj peldany letrehozasi hiba");
+    } finally {
+      setBusyLabel(null);
+    }
+  };
+
   const runAnalysis = async () => {
     if (!hasAnalysisImage) {
       setError("Tölts fel legalább egy front vagy back képet az OpenCV elemzéshez.");
@@ -293,8 +362,6 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const runLocalAI = async () => {
     if (localAIBlockedReason) {
       setError(localAIBlockedReason);
-      return;
-      setError("Local AI nincs bekapcsolva. Állítsd be az LM Studio/Ollama lokális szervert.");
       return;
     }
     setBusyLabel("Local AI elemzés fut...");
@@ -367,6 +434,39 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
               <div className="flex justify-between gap-4"><span>Forrás</span><span>{ownedCard.acquired_source ?? "-"}</span></div>
               <div className="flex justify-between gap-4"><span>Set</span><span>{[card?.set_name, card?.card_number, card?.language].filter(Boolean).join(" · ") || "-"}</span></div>
             </div>
+          </Panel>
+
+          <Panel title="Adatok szerkesztése" subtitle="Owned copy alapadatok helyi mentése.">
+            <form className="space-y-3" onSubmit={saveOwnedCardBasics}>
+              <FieldLabel label="Copy label">
+                <input className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" value={ownedEditForm.copy_label} onChange={(event) => setOwnedEditForm({ ...ownedEditForm, copy_label: event.target.value })} />
+              </FieldLabel>
+              <div className="grid grid-cols-2 gap-3">
+                <FieldLabel label="Status">
+                  <select className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" value={ownedEditForm.status} onChange={(event) => setOwnedEditForm({ ...ownedEditForm, status: event.target.value })}>
+                    {statuses.map((status) => <option key={status}>{status}</option>)}
+                  </select>
+                </FieldLabel>
+                <FieldLabel label="Forrás">
+                  <select className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" value={ownedEditForm.acquired_source} onChange={(event) => setOwnedEditForm({ ...ownedEditForm, acquired_source: event.target.value })}>
+                    {sources.map((source) => <option key={source}>{source}</option>)}
+                  </select>
+                </FieldLabel>
+              </div>
+              <FieldLabel label="Bekerülési ár">
+                <input className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" inputMode="numeric" value={ownedEditForm.acquired_price_huf} onChange={(event) => setOwnedEditForm({ ...ownedEditForm, acquired_price_huf: event.target.value })} />
+              </FieldLabel>
+              <FieldLabel label="Tárolási hely">
+                <input className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" value={ownedEditForm.storage_location} onChange={(event) => setOwnedEditForm({ ...ownedEditForm, storage_location: event.target.value })} />
+              </FieldLabel>
+              <FieldLabel label="Személyes megjegyzés">
+                <textarea className="min-h-20 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" value={ownedEditForm.personal_notes} onChange={(event) => setOwnedEditForm({ ...ownedEditForm, personal_notes: event.target.value })} />
+              </FieldLabel>
+              <div className="grid gap-2 sm:grid-cols-2">
+                <button className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-60" disabled={busy} type="submit">Mentés</button>
+                <button className="rounded-lg border border-slate-700 px-3 py-2 text-sm font-medium text-slate-300 hover:bg-slate-800/50 disabled:opacity-60" disabled={busy} onClick={addCopyOfCurrentCard} type="button">Új példány hozzáadása</button>
+              </div>
+            </form>
           </Panel>
 
           <Panel title="Kép preview és feltöltés">

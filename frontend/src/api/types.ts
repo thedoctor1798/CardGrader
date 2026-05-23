@@ -192,6 +192,7 @@ export type AnalysisReport = {
 
 export type OwnedCardWithCard = OwnedCard & {
   card?: Card | null;
+  latest_raw_price_huf?: number | null;
 };
 
 export type AppInfo = {

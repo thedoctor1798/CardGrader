@@ -114,6 +114,33 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8710/api/collection/snapsho
 
 ## Media Upload Test
 
+## Custom Card Workflow
+
+Use the frontend collection page for normal local use:
+
+1. Start backend and frontend.
+2. Open `http://127.0.0.1:5173/#/collection`.
+3. Click `Új kártya hozzáadása`.
+4. Fill the card fields and owned copy fields.
+5. Submit the form. The new owned card opens automatically.
+
+To add another copy of an existing card:
+
+1. Open the card detail page.
+2. Use `Új példány hozzáadása` in the owned copy edit panel.
+3. Edit the new copy metadata as needed.
+
+After creating a card you can:
+
+- Upload front/back images from the card detail page.
+- Add manual prices in the price panel.
+- Run OpenCV analysis.
+- If configured, run Local AI dry-run first, then Local AI analysis.
+
+The Rowlet demo seed remains available for testing, but it is no longer the main workflow.
+
+## Media Upload Test
+
 1. Seed Rowlet:
 
 ```powershell
