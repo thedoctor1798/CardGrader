@@ -5,8 +5,10 @@ from sqlmodel import Session, select
 
 from ..database import get_session
 from ..models import AnalysisAsset, AnalysisFinding, AnalysisRun, OwnedCard
-from ..schemas import AnalysisRunDetailRead, AnalysisRunRead
+from ..schemas import AnalysisReportRead, AnalysisRunDetailRead, AnalysisRunRead
 from ..services.opencv_analysis import run_opencv_analysis
+from ..services.reporting import build_analysis_report
+from ..services.scoring import score_analysis_run
 
 router = APIRouter()
 
@@ -39,6 +41,22 @@ def get_analysis_run(
         .order_by(AnalysisAsset.created_at, AnalysisAsset.id)
     ).all()
     return {"analysis_run": analysis_run, "findings": findings, "assets": assets}
+
+
+@router.post("/analysis-runs/{analysis_run_id}/score", response_model=AnalysisRunRead)
+def score_run(
+    analysis_run_id: int,
+    session: Session = Depends(get_session),
+):
+    return score_analysis_run(session, analysis_run_id)
+
+
+@router.get("/analysis-runs/{analysis_run_id}/report", response_model=AnalysisReportRead)
+def get_analysis_report(
+    analysis_run_id: int,
+    session: Session = Depends(get_session),
+):
+    return build_analysis_report(session, analysis_run_id)
 
 
 @router.get("/owned-cards/{owned_card_id}/analysis-runs", response_model=List[AnalysisRunRead])

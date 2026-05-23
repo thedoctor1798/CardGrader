@@ -2,6 +2,7 @@
 from .analysis import (
     AnalysisAssetRead,
     AnalysisFindingRead,
+    AnalysisReportRead,
     AnalysisRunDetailRead,
     AnalysisRunRead,
 )
@@ -17,6 +18,7 @@ from .prices import (
 __all__ = [
     "AnalysisAssetRead",
     "AnalysisFindingRead",
+    "AnalysisReportRead",
     "AnalysisRunDetailRead",
     "AnalysisRunRead",
     "CardCreate",

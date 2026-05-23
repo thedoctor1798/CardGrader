@@ -3,6 +3,8 @@ from typing import Optional
 
 from sqlmodel import SQLModel
 
+from .prices import GradingOpportunityRead, PriceObservationRead
+
 
 class AnalysisRunRead(SQLModel):
     id: int
@@ -19,8 +21,8 @@ class AnalysisRunRead(SQLModel):
     edges_score: Optional[float] = None
     surface_score: Optional[float] = None
     overall_score: Optional[float] = None
-    estimated_grade_low: Optional[float] = None
-    estimated_grade_high: Optional[float] = None
+    estimated_grade_low: Optional[str] = None
+    estimated_grade_high: Optional[str] = None
     psa_10_probability: Optional[float] = None
     psa_9_probability: Optional[float] = None
     psa_8_probability: Optional[float] = None
@@ -64,4 +66,62 @@ class AnalysisAssetRead(SQLModel):
 class AnalysisRunDetailRead(SQLModel):
     analysis_run: AnalysisRunRead
     findings: list[AnalysisFindingRead]
+    assets: list[AnalysisAssetRead]
+
+
+class AnalysisReportCardRead(SQLModel):
+    id: int
+    name: str
+    set_name: Optional[str] = None
+    set_code: Optional[str] = None
+    card_number: Optional[str] = None
+    language: Optional[str] = None
+    rarity: Optional[str] = None
+    variant: Optional[str] = None
+    notes: Optional[str] = None
+
+
+class AnalysisReportOwnedCardRead(SQLModel):
+    id: int
+    card_id: int
+    copy_label: Optional[str] = None
+    status: Optional[str] = None
+    acquired_price_huf: Optional[int] = None
+    acquired_source: Optional[str] = None
+    storage_location: Optional[str] = None
+    personal_notes: Optional[str] = None
+
+
+class AnalysisScoresRead(SQLModel):
+    centering_score: Optional[float] = None
+    corners_score: Optional[float] = None
+    edges_score: Optional[float] = None
+    surface_score: Optional[float] = None
+    overall_score: Optional[float] = None
+
+
+class AnalysisProbabilitiesRead(SQLModel):
+    psa_10_probability: Optional[float] = None
+    psa_9_probability: Optional[float] = None
+    psa_8_probability: Optional[float] = None
+    psa_7_or_lower_probability: Optional[float] = None
+
+
+class AnalysisGradeRangeRead(SQLModel):
+    estimated_grade_low: Optional[str] = None
+    estimated_grade_high: Optional[str] = None
+
+
+class AnalysisReportRead(SQLModel):
+    card: AnalysisReportCardRead
+    owned_card: AnalysisReportOwnedCardRead
+    scores: AnalysisScoresRead
+    probabilities: AnalysisProbabilitiesRead
+    estimated_grade_range: AnalysisGradeRangeRead
+    confidence_level: Optional[str] = None
+    human_summary: Optional[str] = None
+    recommendation: Optional[str] = None
+    recommendation_reason: Optional[str] = None
+    latest_price: Optional[PriceObservationRead] = None
+    opportunity_precheck: Optional[GradingOpportunityRead] = None
     assets: list[AnalysisAssetRead]
