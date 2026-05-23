@@ -38,3 +38,6 @@ frontend/dist/
 # OS
 .DS_Store
 Thumbs.db
+# Local test files
+/test.jpg
+/test.*

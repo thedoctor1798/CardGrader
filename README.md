@@ -24,3 +24,25 @@ Notes:
 - Database: `data/cardgrader.db`
 - Media folders are created under `media/` (`originals`, `resized`, `crops`, `annotated`, `video_frames`, `reports`).
 - No external AI or network calls are made by the MVP.
+
+Manual media upload test:
+
+1. Seed the Rowlet demo row:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://localhost:8710/api/demo/seed-rowlet
+```
+
+2. Upload an image to the owned card ID returned by the seed response:
+
+```powershell
+curl.exe -X POST http://localhost:8710/api/owned-cards/1/media `
+  -F "label=front" `
+  -F "file=@C:\path\to\rowlet-front.jpg"
+```
+
+3. List media for that owned card:
+
+```powershell
+Invoke-RestMethod -Method Get -Uri http://localhost:8710/api/owned-cards/1/media
+```

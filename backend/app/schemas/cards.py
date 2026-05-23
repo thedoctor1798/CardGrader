@@ -44,3 +44,16 @@ class OwnedCardRead(OwnedCardBase):
     id: int
     created_at: datetime
     updated_at: datetime
+
+
+class CardMediaRead(SQLModel):
+    id: int
+    owned_card_id: int
+    media_type: str
+    label: str
+    file_path: str
+    original_filename: Optional[str] = None
+    width: Optional[int] = None
+    height: Optional[int] = None
+    file_size_bytes: Optional[int] = None
+    created_at: datetime

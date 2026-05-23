@@ -1,5 +1,5 @@
 from fastapi import FastAPI
-from .routers import cards, demo, health, owned_cards
+from .routers import cards, demo, health, media, owned_cards
 from .database import init_db
 from .utils.files import ensure_media_dirs
 from .config import HOST, PORT
@@ -9,6 +9,7 @@ app = FastAPI(title="CardGrader AI Local Edition")
 app.include_router(cards.router, prefix="/api")
 app.include_router(demo.router, prefix="/api")
 app.include_router(health.router, prefix="/api")
+app.include_router(media.router)
 app.include_router(owned_cards.router, prefix="/api")
 
 
