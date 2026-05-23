@@ -43,6 +43,20 @@ def get_analysis_run(
     return {"analysis_run": analysis_run, "findings": findings, "assets": assets}
 
 
+@router.get("/analysis-runs/{analysis_run_id}/findings")
+def get_analysis_run_findings(
+    analysis_run_id: int,
+    session: Session = Depends(get_session),
+):
+    if session.get(AnalysisRun, analysis_run_id) is None:
+        raise HTTPException(status_code=404, detail="Analysis run not found")
+    return session.exec(
+        select(AnalysisFinding)
+        .where(AnalysisFinding.analysis_run_id == analysis_run_id)
+        .order_by(AnalysisFinding.created_at, AnalysisFinding.id)
+    ).all()
+
+
 @router.post("/analysis-runs/{analysis_run_id}/score", response_model=AnalysisRunRead)
 def score_run(
     analysis_run_id: int,

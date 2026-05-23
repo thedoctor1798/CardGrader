@@ -1,7 +1,7 @@
 import { RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
-import type { AppInfo } from "../api/types";
+import type { AppInfo, LocalAIStatus } from "../api/types";
 import { EmptyState } from "../components/EmptyState";
 import { LoadingState } from "../components/LoadingState";
 import { Panel } from "../components/Panel";
@@ -9,6 +9,7 @@ import { StatCard } from "../components/StatCard";
 
 export function SettingsPage() {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
+  const [localAI, setLocalAI] = useState<LocalAIStatus | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
@@ -17,7 +18,9 @@ export function SettingsPage() {
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      setAppInfo(await api.getAppInfo());
+      const [info, aiStatus] = await Promise.all([api.getAppInfo(), api.getLocalAIStatus()]);
+      setAppInfo(info);
+      setLocalAI(aiStatus);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Nem sikerült betölteni az app infót.");
@@ -31,8 +34,7 @@ export function SettingsPage() {
   }, [load]);
 
   const resetLocalData = async () => {
-    const confirmed = window.confirm("Biztosan törlöd a lokális teszt adatokat?");
-    if (!confirmed) return;
+    if (!window.confirm("Biztosan törlöd a lokális teszt adatokat?")) return;
     setBusy(true);
     setMessage(null);
     try {
@@ -47,8 +49,7 @@ export function SettingsPage() {
   };
 
   const cleanupGeneratedMedia = async () => {
-    const confirmed = window.confirm("Biztosan törlöd a generált media fájlokat? Az originals mappa megmarad.");
-    if (!confirmed) return;
+    if (!window.confirm("Biztosan törlöd a generált media fájlokat? Az originals mappa megmarad.")) return;
     setBusy(true);
     setMessage(null);
     try {
@@ -69,7 +70,7 @@ export function SettingsPage() {
       <div>
         <p className="text-xs font-semibold uppercase tracking-wide text-blue-300">Local runtime</p>
         <h2 className="mt-1 text-2xl font-semibold text-slate-50">Beállítások</h2>
-        <p className="mt-1 text-sm text-slate-400">Lokális MVP állapot és fejlesztői segédeszközök.</p>
+        <p className="mt-1 text-sm text-slate-400">Lokális MVP állapot, Local AI státusz és fejlesztői segédeszközök.</p>
       </div>
 
       {message && <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-200">{message}</div>}
@@ -80,13 +81,27 @@ export function SettingsPage() {
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <StatCard label="Mód" value="Local-only mód" tone="good" />
             <StatCard label="Külső API" value={appInfo.external_apis_enabled ? "bekapcsolva" : "kikapcsolva"} tone={appInfo.external_apis_enabled ? "warn" : "good"} />
-            <StatCard label="Local AI" value={appInfo.local_ai_enabled ? "bekapcsolva" : "még nincs bekapcsolva"} tone="warn" />
+            <StatCard label="Local AI" value={appInfo.local_ai_enabled ? "bekapcsolva" : "még nincs bekapcsolva"} tone={appInfo.local_ai_enabled ? "good" : "warn"} />
             <StatCard label="Adatbázis" value={`${appInfo.database.toUpperCase()} adatbázis`} />
-            <StatCard label="Media storage" value={appInfo.media_storage} />
           </div>
         </Panel>
       ) : (
         <EmptyState label="App info nem érhető el." />
+      )}
+
+      {localAI && (
+        <Panel title="Local AI státusz" subtitle="Csak localhost model szerver engedélyezett. Nincs API kulcs és nincs külső AI hívás.">
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <StatCard label="Enabled" value={localAI.enabled ? "igen" : "nem"} tone={localAI.enabled ? "good" : "warn"} />
+            <StatCard label="Provider" value={localAI.provider} />
+            <StatCard label="Base URL" value={localAI.base_url} />
+            <StatCard label="Model" value={localAI.model_name || "-"} />
+            <StatCard label="Localhost" value={localAI.is_localhost ? "igen" : "nem"} tone={localAI.is_localhost ? "good" : "bad"} />
+            <StatCard label="Reachable" value={localAI.reachable ? "igen" : "nem"} tone={localAI.reachable ? "good" : "warn"} />
+            <StatCard label="Vision" value={localAI.vision_capable} />
+          </div>
+          <p className="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-sm text-slate-300">{localAI.message}</p>
+        </Panel>
       )}
 
       <Panel title="Fejlesztői demo műveletek" subtitle="Csak lokális, single-user MVP használatra. Az originals media mappát egyik művelet sem törli.">
@@ -110,9 +125,6 @@ export function SettingsPage() {
             Cleanup generated media
           </button>
         </div>
-        <p className="mt-4 text-xs leading-5 text-slate-500">
-          Reset: törli a lokális SQLite tesztadatokat. Cleanup: törli a resized/crops/annotated/video_frames/reports generált fájlokat, de nem törli a media/originals feltöltéseket.
-        </p>
       </Panel>
     </div>
   );

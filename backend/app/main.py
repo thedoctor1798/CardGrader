@@ -1,9 +1,9 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .routers import analysis, cards, collection, demo, health, media, owned_cards, prices
+from .routers import analysis, cards, collection, demo, health, local_ai, media, owned_cards, prices
 from .database import init_db
 from .utils.files import ensure_media_dirs
-from .config import HOST, PORT
+from .config import HOST, LOCAL_AI_ENABLED, PORT
 
 app = FastAPI(title="CardGrader AI Local Edition")
 
@@ -27,6 +27,7 @@ app.include_router(cards.router, prefix="/api")
 app.include_router(collection.router, prefix="/api")
 app.include_router(demo.router, prefix="/api")
 app.include_router(health.router, prefix="/api")
+app.include_router(local_ai.router, prefix="/api")
 app.include_router(media.router)
 app.include_router(owned_cards.router, prefix="/api")
 app.include_router(prices.router, prefix="/api")
@@ -49,7 +50,7 @@ def app_info():
         "name": "CardGrader AI Local Edition",
         "mode": "local-only",
         "external_apis_enabled": False,
-        "local_ai_enabled": False,
+        "local_ai_enabled": LOCAL_AI_ENABLED,
         "database": "sqlite",
         "media_storage": "local",
     }

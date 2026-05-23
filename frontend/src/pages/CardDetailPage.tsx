@@ -1,7 +1,7 @@
 import { Play, RefreshCw, Upload, X } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import { api, mediaUrl } from "../api/client";
-import type { AnalysisAsset, AnalysisReport, AnalysisRun, Card, CardMedia, OwnedCard, PriceObservation } from "../api/types";
+import type { AnalysisAsset, AnalysisFinding, AnalysisReport, AnalysisRun, Card, CardMedia, LocalAIStatus, OwnedCard, PriceObservation } from "../api/types";
 import { EmptyState } from "../components/EmptyState";
 import { LoadingState } from "../components/LoadingState";
 import { Panel } from "../components/Panel";
@@ -77,6 +77,8 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const [media, setMedia] = useState<CardMedia[]>([]);
   const [latestPrice, setLatestPrice] = useState<PriceObservation | null>(null);
   const [analysisRuns, setAnalysisRuns] = useState<AnalysisRun[]>([]);
+  const [findings, setFindings] = useState<AnalysisFinding[]>([]);
+  const [localAI, setLocalAI] = useState<LocalAIStatus | null>(null);
   const [report, setReport] = useState<AnalysisReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
@@ -127,7 +129,18 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
         setPriceForm(emptyPriceForm);
       }
 
-      await loadReport(runsData[0]?.id ?? null);
+      const latestRunId = runsData[0]?.id ?? null;
+      await loadReport(latestRunId);
+      if (latestRunId) {
+        setFindings(await api.getAnalysisFindings(latestRunId));
+      } else {
+        setFindings([]);
+      }
+      try {
+        setLocalAI(await api.getLocalAIStatus());
+      } catch {
+        setLocalAI(null);
+      }
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ismeretlen hiba");
@@ -214,6 +227,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
       const runsData = await api.getAnalysisRuns(ownedCardId);
       setAnalysisRuns(runsData);
       await loadReport(newRun.id);
+      setFindings(await api.getAnalysisFindings(newRun.id));
       setMessage("OpenCV elemzés és score elkészült.");
       setError(null);
     } catch (err) {
@@ -230,12 +244,35 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
     try {
       await api.scoreAnalysisRun(latestAnalysis.id);
       await loadReport(latestAnalysis.id);
+      setFindings(await api.getAnalysisFindings(latestAnalysis.id));
       const runsData = await api.getAnalysisRuns(ownedCardId);
       setAnalysisRuns(runsData);
       setMessage("Score/report frissítve.");
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Score/report hiba");
+    } finally {
+      setBusyLabel(null);
+    }
+  };
+
+  const runLocalAI = async () => {
+    if (!localAI?.enabled || !localAI.reachable) {
+      setError("Local AI nincs bekapcsolva. Állítsd be az LM Studio/Ollama lokális szervert.");
+      return;
+    }
+    setBusyLabel("Local AI elemzés fut...");
+    setMessage(null);
+    try {
+      const aiRun = await api.runLocalAIFastAnalysis(ownedCardId);
+      const runsData = await api.getAnalysisRuns(ownedCardId);
+      setAnalysisRuns(runsData);
+      await loadReport(aiRun.id);
+      setFindings(await api.getAnalysisFindings(aiRun.id));
+      setMessage("Local AI elemzés elkészült.");
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Local AI elemzési hiba");
     } finally {
       setBusyLabel(null);
     }
@@ -417,6 +454,31 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
             )}
           </Panel>
 
+          <Panel title="Local AI elemzés" subtitle="Localhost-only vision model adapter. OpenCV elemzés után használható.">
+            {localAI && (!localAI.enabled || !localAI.reachable) && (
+              <div className="mb-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
+                Local AI nincs bekapcsolva. Állítsd be az LM Studio/Ollama lokális szervert.
+              </div>
+            )}
+            {localAI && (
+              <div className="mb-4 grid grid-cols-2 gap-2">
+                <StatCard label="Provider" value={localAI.provider} />
+                <StatCard label="Reachable" value={localAI.reachable ? "igen" : "nem"} tone={localAI.reachable ? "good" : "warn"} />
+                <StatCard label="Model" value={localAI.model_name || "-"} />
+                <StatCard label="Base URL" value={localAI.base_url} />
+              </div>
+            )}
+            <button
+              className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-blue-500/40 px-3 py-2 text-sm text-blue-200 hover:bg-blue-500/10 disabled:opacity-60"
+              disabled={busy || !localAI?.enabled || !localAI.reachable}
+              onClick={runLocalAI}
+              type="button"
+            >
+              <Play size={16} />
+              Local AI elemzés indítása
+            </button>
+          </Panel>
+
           <Panel title="Analysis run lista">
             {analysisRuns.length === 0 ? (
               <EmptyState label="Még nincs elemzési előzmény." />
@@ -520,6 +582,23 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                   <div className="font-semibold">{report.recommendation ?? "-"}</div>
                   <p className="mt-2 leading-6">{report.recommendation_reason}</p>
                 </div>
+                {findings.length > 0 && (
+                  <div className="rounded-lg border border-slate-800 bg-charcoal-900 p-4">
+                    <h3 className="text-sm font-semibold text-slate-100">Talált hibák</h3>
+                    <div className="mt-3 space-y-3">
+                      {findings.map((finding) => (
+                        <div key={finding.id} className="rounded-lg border border-slate-800 bg-slate-950/25 p-3 text-sm">
+                          <div className="font-medium text-slate-100">{finding.title ?? "Finding"}</div>
+                          <div className="mt-1 text-xs text-slate-500">
+                            {finding.finding_type ?? "unknown"} · {finding.severity ?? "-"} · confidence {formatNumber(finding.confidence, 2)} · {finding.location_label ?? "-"}
+                          </div>
+                          <p className="mt-2 leading-5 text-slate-300">{finding.description}</p>
+                          <div className="mt-2 text-xs text-amber-200">Grade impact: {finding.grade_impact ?? "-"}</div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                )}
                 {report.opportunity_precheck && (
                   <div className="grid grid-cols-2 gap-2">
                     <StatCard label="Opp. raw" value={formatHuf(report.opportunity_precheck.raw_price_huf)} />

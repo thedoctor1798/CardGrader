@@ -123,6 +123,24 @@ export type AnalysisAsset = {
   created_at: string;
 };
 
+export type AnalysisFinding = {
+  id: number;
+  analysis_run_id: number;
+  media_id?: number | null;
+  finding_type?: string | null;
+  severity?: string | null;
+  confidence?: number | null;
+  location_label?: string | null;
+  bbox_x?: number | null;
+  bbox_y?: number | null;
+  bbox_width?: number | null;
+  bbox_height?: number | null;
+  title?: string | null;
+  description?: string | null;
+  grade_impact?: string | null;
+  created_at: string;
+};
+
 export type OpportunityPrecheck = {
   raw_price_huf?: number | null;
   psa_7_price_huf?: number | null;
@@ -201,4 +219,15 @@ export type CleanupGeneratedMediaResponse = {
   message: string;
   deleted_files: number;
   deleted: Record<string, number>;
+};
+
+export type LocalAIStatus = {
+  enabled: boolean;
+  provider: string;
+  base_url: string;
+  model_name?: string | null;
+  is_localhost: boolean;
+  reachable: boolean;
+  vision_capable: string;
+  message: string;
 };

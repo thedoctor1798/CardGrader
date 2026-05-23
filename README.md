@@ -142,6 +142,43 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8710/api/analysis-runs/1/sc
 Invoke-RestMethod -Method Get -Uri http://127.0.0.1:8710/api/analysis-runs/1/report
 ```
 
+## Local AI Setup
+
+Local AI is optional and disabled by default. Only localhost model servers are allowed. No API key is used.
+
+Example with LM Studio:
+
+1. Install and start LM Studio.
+2. Load a vision-capable local model.
+3. Start the LM Studio local server.
+4. Set environment variables before starting the backend:
+
+```powershell
+$env:LOCAL_AI_ENABLED="true"
+$env:LOCAL_AI_PROVIDER="lmstudio"
+$env:LOCAL_AI_BASE_URL="http://127.0.0.1:1234/v1"
+$env:LOCAL_AI_MODEL_NAME="<your-local-vision-model>"
+$env:LOCAL_AI_TIMEOUT_SECONDS="120"
+.\start_cardgrader.bat
+```
+
+Allowed local base URLs:
+
+- `http://127.0.0.1:1234/v1`
+- `http://localhost:1234/v1`
+- `http://127.0.0.1:11434`
+- `http://localhost:11434`
+- `http://127.0.0.1:8080/v1`
+- `http://localhost:8080/v1`
+
+Run OpenCV analysis first, then run Local AI analysis from the Card Detail page.
+
+Check status:
+
+```powershell
+Invoke-RestMethod -Method Get -Uri http://127.0.0.1:8710/api/local-ai/status
+```
+
 ## Local Files
 
 - Database: `data/cardgrader.db`

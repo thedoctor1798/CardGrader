@@ -121,7 +121,7 @@ class AnalysisFinding(SQLModel, table=True):
     bbox_height: Optional[float] = None
     title: Optional[str] = None
     description: Optional[str] = None
-    grade_impact: Optional[float] = None
+    grade_impact: Optional[str] = None
     created_at: datetime = Field(default_factory=utc_now)
 
 

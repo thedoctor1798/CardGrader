@@ -225,7 +225,7 @@ def add_metrics_finding(
                 f"glare_risk={metrics.glare_risk}, "
                 f"glare_percent={metrics.glare_percent}, {border_text}"
             ),
-            grade_impact=None if metrics.usable else -0.5,
+            grade_impact=None if metrics.usable else "low",
         )
     )
 
