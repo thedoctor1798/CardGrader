@@ -8,7 +8,10 @@ from ..services.local_ai import (
     local_ai_config,
     local_ai_debug_single_image,
     local_ai_status,
+    run_local_ai_aggregate,
     run_local_ai_fast,
+    run_local_ai_full_review,
+    run_local_ai_pass,
     test_local_ai_connection,
 )
 
@@ -38,12 +41,45 @@ def analyze_owned_card_local_ai_fast(
     return run_local_ai_fast(session, owned_card_id)
 
 
-@router.post("/owned-cards/{owned_card_id}/analyze/local-ai-dry-run")
-def analyze_owned_card_local_ai_dry_run(
+@router.post("/owned-cards/{owned_card_id}/analyze/local-ai-front")
+def analyze_owned_card_local_ai_front(
     owned_card_id: int,
     session: Session = Depends(get_session),
 ):
-    return dry_run_local_ai(session, owned_card_id)
+    return run_local_ai_pass(session, owned_card_id, "front")
+
+
+@router.post("/owned-cards/{owned_card_id}/analyze/local-ai-back")
+def analyze_owned_card_local_ai_back(
+    owned_card_id: int,
+    session: Session = Depends(get_session),
+):
+    return run_local_ai_pass(session, owned_card_id, "back")
+
+
+@router.post("/owned-cards/{owned_card_id}/analyze/local-ai-aggregate")
+def analyze_owned_card_local_ai_aggregate(
+    owned_card_id: int,
+    session: Session = Depends(get_session),
+):
+    return run_local_ai_aggregate(session, owned_card_id)
+
+
+@router.post("/owned-cards/{owned_card_id}/analyze/local-ai-full-review")
+def analyze_owned_card_local_ai_full_review(
+    owned_card_id: int,
+    session: Session = Depends(get_session),
+):
+    return run_local_ai_full_review(session, owned_card_id)
+
+
+@router.post("/owned-cards/{owned_card_id}/analyze/local-ai-dry-run")
+def analyze_owned_card_local_ai_dry_run(
+    owned_card_id: int,
+    pass_type: str = "fast",
+    session: Session = Depends(get_session),
+):
+    return dry_run_local_ai(session, owned_card_id, pass_type)
 
 
 @router.post("/owned-cards/{owned_card_id}/analyze/local-ai-debug-single-image")

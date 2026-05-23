@@ -148,6 +148,9 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const visibleFindings = report?.findings?.length ? report.findings : findings;
   const hasAnalysisImage = media.some((item) => item.media_type === "image" && (item.label === "front" || item.label === "back"));
   const latestOpenCvAnalysis = analysisRuns.find((run) => run.mode === "local_only" && run.status === "completed") ?? null;
+  const frontFindings = visibleFindings.filter((finding) => finding.side === "front" && !finding.photo_quality_issue);
+  const backFindings = visibleFindings.filter((finding) => finding.side === "back" && !finding.photo_quality_issue);
+  const uncertainFindings = visibleFindings.filter((finding) => finding.photo_quality_issue || finding.finding_type === "glare_uncertain" || finding.confirmed === false);
   const localAIBlockedReason = !latestOpenCvAnalysis
     ? "Elobb futtasd az OpenCV elemzest."
     : !localAI?.enabled
@@ -224,10 +227,13 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const groupedAssets = useMemo(() => {
     const assets = report?.assets ?? [];
     return {
+      front: assets.filter((asset) => asset.label?.startsWith("front")),
+      back: assets.filter((asset) => asset.label?.startsWith("back")),
       resized: assets.filter((asset) => asset.asset_type === "resized_image"),
       corners: assets.filter((asset) => asset.label?.includes("corner")),
       edges: assets.filter((asset) => asset.label?.includes("edge")),
       annotated: assets.filter((asset) => asset.asset_type === "annotated_image"),
+      debug: assets.filter((asset) => asset.asset_type?.startsWith("local_ai")),
     };
   }, [report]);
 
@@ -384,6 +390,50 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
       } else {
         setError(detail);
       }
+    } finally {
+      setBusyLabel(null);
+    }
+  };
+
+  const runLocalAIPass = async (passType: "front" | "back") => {
+    if (localAIBlockedReason) {
+      setError(localAIBlockedReason);
+      return;
+    }
+    setBusyLabel(passType === "front" ? "Front elemzés fut..." : "Back elemzés fut...");
+    setMessage(null);
+    try {
+      const result = passType === "front"
+        ? await api.runLocalAIFrontAnalysis(ownedCardId)
+        : await api.runLocalAIBackAnalysis(ownedCardId);
+      const runsData = await api.getAnalysisRuns(ownedCardId);
+      setAnalysisRuns(runsData);
+      await loadReport(result.analysis_run.id);
+      setMessage(`${passType === "front" ? "Front" : "Back"} elemzés elkészült. Findingok: ${result.finding_count}.`);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Local AI pass hiba");
+    } finally {
+      setBusyLabel(null);
+    }
+  };
+
+  const runLocalAIFullReview = async () => {
+    if (localAIBlockedReason) {
+      setError(localAIBlockedReason);
+      return;
+    }
+    setBusyLabel("Teljes local AI review fut...");
+    setMessage(null);
+    try {
+      const result = await api.runLocalAIFullReview(ownedCardId);
+      const runsData = await api.getAnalysisRuns(ownedCardId);
+      setAnalysisRuns(runsData);
+      await loadReport(result.aggregate.analysis_run.id);
+      setMessage(`Teljes local AI review elkészült. Findingok: ${result.aggregate.finding_count}.`);
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Teljes local AI review hiba");
     } finally {
       setBusyLabel(null);
     }
@@ -565,6 +615,15 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
               <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-500/40 px-3 py-2 text-sm font-medium text-emerald-200 hover:bg-emerald-500/10 disabled:opacity-50" disabled={busy || Boolean(localAIBlockedReason)} onClick={runLocalAI} type="button">
                 <Play size={16} /> Local AI elemzés indítása
               </button>
+              <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-500/40 px-3 py-2 text-sm font-medium text-blue-200 hover:bg-blue-500/10 disabled:opacity-50" disabled={busy || Boolean(localAIBlockedReason)} onClick={() => runLocalAIPass("front")} type="button">
+                Front elemzés
+              </button>
+              <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-500/40 px-3 py-2 text-sm font-medium text-blue-200 hover:bg-blue-500/10 disabled:opacity-50" disabled={busy || Boolean(localAIBlockedReason)} onClick={() => runLocalAIPass("back")} type="button">
+                Back elemzés
+              </button>
+              <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-emerald-500/40 px-3 py-2 text-sm font-medium text-emerald-200 hover:bg-emerald-500/10 disabled:opacity-50" disabled={busy || Boolean(localAIBlockedReason)} onClick={runLocalAIFullReview} type="button">
+                Teljes local AI review
+              </button>
               <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-600 px-3 py-2 text-sm font-medium text-slate-200 hover:bg-slate-800/50 disabled:opacity-50" disabled={busy || !latestOpenCvAnalysis} onClick={runLocalAIDryRun} type="button">
                 Local AI dry-run
               </button>
@@ -656,6 +715,9 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
               <div className="space-y-5">
                 {([
                   ["Annotated", groupedAssets.annotated],
+                  ["Front", groupedAssets.front],
+                  ["Back", groupedAssets.back],
+                  ["Debug", groupedAssets.debug],
                   ["Resized", groupedAssets.resized],
                   ["Corners", groupedAssets.corners],
                   ["Edges", groupedAssets.edges],
@@ -668,7 +730,11 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                       <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                         {assets.map((asset) => (
                           <button key={asset.id} className="rounded-lg border border-slate-800 bg-charcoal-900 p-2 text-left transition hover:border-blue-500/50 hover:bg-slate-800/40" onClick={() => setPreviewAsset(asset)} type="button">
-                            <img className="aspect-square w-full rounded object-cover" src={mediaUrl(asset.file_path)} alt={asset.label ?? "asset"} />
+                            {title === "Debug" ? (
+                              <div className="flex aspect-square w-full items-center justify-center rounded bg-slate-950 p-2 text-center text-xs text-slate-400">debug file</div>
+                            ) : (
+                              <img className="aspect-square w-full rounded object-cover" src={mediaUrl(asset.file_path)} alt={asset.label ?? "asset"} />
+                            )}
                             <div className="mt-2 truncate text-xs text-slate-400">{asset.label}</div>
                           </button>
                         ))}
@@ -720,6 +786,10 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                   <div className="font-semibold">{report.recommendation ?? "-"}</div>
                   <p className="mt-2 leading-6">{report.recommendation_reason}</p>
                 </div>
+
+                <FindingSection title="Front findings" findings={frontFindings} />
+                <FindingSection title="Back findings" findings={backFindings} />
+                <FindingSection title="Bizonytalan / fotóminőségi jelzések" findings={uncertainFindings} />
 
                 {visibleFindings.length > 0 && (
                   <div className="rounded-lg border border-slate-800 bg-charcoal-900 p-4">
@@ -792,6 +862,32 @@ function ReportList({ title, items }: { title: string; items: string[] }) {
       <ul className="space-y-1">
         {items.map((item) => <li key={item}>• {item}</li>)}
       </ul>
+    </div>
+  );
+}
+
+function FindingSection({ title, findings }: { title: string; findings: AnalysisFinding[] }) {
+  if (findings.length === 0) return null;
+  return (
+    <div className="rounded-lg border border-slate-800 bg-charcoal-900 p-4">
+      <h3 className="text-sm font-semibold text-slate-100">{title}</h3>
+      <div className="mt-3 space-y-3">
+        {findings.map((finding) => (
+          <div key={`${title}-${finding.id}`} className="rounded-lg border border-slate-800 bg-slate-950/25 p-3 text-sm">
+            <div className="font-medium text-slate-100">{finding.title ?? "Finding"}</div>
+            <div className="mt-2 flex flex-wrap gap-2">
+              <FindingBadge>{finding.finding_type ?? "unknown"}</FindingBadge>
+              <FindingBadge tone={severityTone(finding.severity)}>{finding.severity ?? "-"}</FindingBadge>
+              <FindingBadge>{finding.confirmed === false ? "uncertain" : "confirmed"}</FindingBadge>
+              <FindingBadge>confidence {formatNumber(finding.confidence, 2)}</FindingBadge>
+              <FindingBadge tone={finding.grade_impact === "high" ? "danger" : "default"}>impact {finding.grade_impact ?? "-"}</FindingBadge>
+            </div>
+            <p className="mt-2 leading-5 text-slate-300">{finding.description}</p>
+            <div className="mt-2 text-xs text-slate-500">{finding.location_label ?? "-"}</div>
+            {finding.uncertainty_reason && <div className="mt-2 text-xs text-amber-200">{finding.uncertainty_reason}</div>}
+          </div>
+        ))}
+      </div>
     </div>
   );
 }

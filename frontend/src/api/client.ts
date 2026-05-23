@@ -94,8 +94,18 @@ export const api = {
     request<AnalysisRun>(`/api/owned-cards/${ownedCardId}/analyze/opencv`, { method: "POST" }),
   runLocalAIFastAnalysis: (ownedCardId: number) =>
     request<LocalAIAnalysisResponse>(`/api/owned-cards/${ownedCardId}/analyze/local-ai-fast`, { method: "POST" }),
+  runLocalAIFrontAnalysis: (ownedCardId: number) =>
+    request<LocalAIAnalysisResponse>(`/api/owned-cards/${ownedCardId}/analyze/local-ai-front`, { method: "POST" }),
+  runLocalAIBackAnalysis: (ownedCardId: number) =>
+    request<LocalAIAnalysisResponse>(`/api/owned-cards/${ownedCardId}/analyze/local-ai-back`, { method: "POST" }),
+  runLocalAIAggregate: (ownedCardId: number) =>
+    request<{ analysis_run: AnalysisRun; finding_count: number; report: AnalysisReport }>(`/api/owned-cards/${ownedCardId}/analyze/local-ai-aggregate`, { method: "POST" }),
+  runLocalAIFullReview: (ownedCardId: number) =>
+    request<{ aggregate: { analysis_run: AnalysisRun; finding_count: number; report: AnalysisReport } }>(`/api/owned-cards/${ownedCardId}/analyze/local-ai-full-review`, { method: "POST" }),
   runLocalAIDryRun: (ownedCardId: number) =>
     request<LocalAIDryRun>(`/api/owned-cards/${ownedCardId}/analyze/local-ai-dry-run`, { method: "POST" }),
+  runLocalAIDryRunForPass: (ownedCardId: number, passType: "front" | "back" | "fast" | "full") =>
+    request<LocalAIDryRun>(`/api/owned-cards/${ownedCardId}/analyze/local-ai-dry-run?pass_type=${passType}`, { method: "POST" }),
   runLocalAIDebugSingleImage: (ownedCardId: number) =>
     request<LocalAIDebugSingleImageResponse>(`/api/owned-cards/${ownedCardId}/analyze/local-ai-debug-single-image`, { method: "POST" }),
   scoreAnalysisRun: (analysisRunId: number) =>

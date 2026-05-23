@@ -41,6 +41,31 @@ ASSET_PRIORITY = [
     "back_corner_bl",
     "back_corner_br",
 ]
+PASS_ASSET_PRIORITY = {
+    "front": [
+        "front_resized",
+        "front_corner_tl",
+        "front_corner_tr",
+        "front_corner_bl",
+        "front_corner_br",
+        "front_edge_top",
+        "front_edge_right",
+        "front_edge_bottom",
+        "front_edge_left",
+    ],
+    "back": [
+        "back_resized",
+        "back_corner_tl",
+        "back_corner_tr",
+        "back_corner_bl",
+        "back_corner_br",
+        "back_edge_top",
+        "back_edge_right",
+        "back_edge_bottom",
+        "back_edge_left",
+    ],
+    "fast": ["front_resized", "back_resized"],
+}
 ALLOWED_FINDING_TYPES = {
     "corner_whitening",
     "edge_whitening",
@@ -55,6 +80,7 @@ ALLOWED_FINDING_TYPES = {
 }
 ALLOWED_SEVERITIES = {"none", "very_minor", "minor", "moderate", "severe"}
 ALLOWED_GRADE_IMPACTS = {"none", "low", "medium", "high"}
+ALLOWED_SIDES = {"front", "back", "unknown"}
 
 
 def is_localhost_url(base_url: str) -> bool:
@@ -235,6 +261,10 @@ def data_url_for_asset(asset: AnalysisAsset) -> dict[str, Any]:
 
 
 def collect_assets(session: Session, opencv_run_id: int) -> list[AnalysisAsset]:
+    return collect_assets_for_pass(session, opencv_run_id, "fast")
+
+
+def collect_assets_for_pass(session: Session, opencv_run_id: int, pass_type: str) -> list[AnalysisAsset]:
     statement = (
         select(AnalysisAsset)
         .where(AnalysisAsset.analysis_run_id == opencv_run_id)
@@ -242,7 +272,10 @@ def collect_assets(session: Session, opencv_run_id: int) -> list[AnalysisAsset]:
         .order_by(AnalysisAsset.created_at, AnalysisAsset.id)
     )
     assets = session.exec(statement).all()
-    priority = {label: index for index, label in enumerate(ASSET_PRIORITY)}
+    labels = PASS_ASSET_PRIORITY.get(pass_type, ASSET_PRIORITY)
+    priority = {label: index for index, label in enumerate(labels)}
+    allowed = set(labels)
+    assets = [asset for asset in assets if (asset.label or "") in allowed]
     return sorted(
         assets,
         key=lambda asset: (
@@ -278,7 +311,21 @@ def opencv_measurements(session: Session, opencv_run: AnalysisRun) -> dict[str, 
     }
 
 
-def build_prompt(card: Card, measurements: dict[str, Any]) -> str:
+def pass_focus_text(pass_type: str) -> str:
+    if pass_type == "front":
+        return (
+            "Only analyze front images. Do not mention the back. Do not assume back condition. "
+            "Focus on front surface, front corners, front edges, print lines, scratches, dents, and holo glare uncertainty."
+        )
+    if pass_type == "back":
+        return (
+            "Only analyze back images. Do not mention the front. Do not assume front condition. "
+            "Focus on whitening, back edge wear, back corner wear, dents, scratches, and stains."
+        )
+    return "Analyze only the images provided. Do not assume missing side condition."
+
+
+def build_prompt(card: Card, measurements: dict[str, Any], pass_type: str = "fast") -> str:
     no_thinking = (
         "Do not think step by step. Do not output reasoning. Return only the final JSON object. "
         "Start with { and end with }.\n\n"
@@ -300,6 +347,10 @@ The card metadata:
 
 Local OpenCV measurements:
 {json.dumps(measurements, ensure_ascii=False)}
+
+Pass type: {pass_type}
+Pass instructions:
+{pass_focus_text(pass_type)}
 
 Your task:
 Analyze the provided images and crops:
@@ -323,6 +374,7 @@ Look for:
 Use this strict JSON schema:
 {{
   "overall_visual_condition": "string",
+  "side": "front | back | unknown",
   "surface_assessment": {{
     "front": {{"summary": "string", "confidence": 0.0}},
     "back": {{"summary": "string", "confidence": 0.0}}
@@ -330,8 +382,12 @@ Use this strict JSON schema:
   "findings": [
     {{
       "image_label": "front | back | corner_tl | corner_tr | corner_bl | corner_br | edge_top | edge_right | edge_bottom | edge_left | unknown",
+      "side": "front | back | unknown",
       "finding_type": "corner_whitening | edge_whitening | scratch | print_line | dent | stain | surface_wear | glare_uncertain | image_quality_issue | unknown",
       "severity": "none | very_minor | minor | moderate | severe",
+      "confirmed": true,
+      "uncertainty_reason": null,
+      "photo_quality_issue": false,
       "confidence": 0.0,
       "location_label": "string",
       "bbox": {{"x": 0, "y": 0, "width": 0, "height": 0}},
@@ -473,11 +529,26 @@ def normalize_finding(item: Any) -> dict[str, Any] | None:
     grade_impact = str(item.get("grade_impact") or "low").lower()
     if grade_impact not in ALLOWED_GRADE_IMPACTS:
         grade_impact = "low"
+    side = str(item.get("side") or item.get("image_label") or item.get("location_label") or "unknown").lower()
+    if side.startswith("front"):
+        side = "front"
+    elif side.startswith("back"):
+        side = "back"
+    elif side not in ALLOWED_SIDES:
+        side = "unknown"
+    photo_quality_issue = bool(item.get("photo_quality_issue")) or finding_type in {"glare_uncertain", "image_quality_issue"}
+    confirmed = item.get("confirmed")
+    if confirmed is None:
+        confirmed = finding_type not in {"glare_uncertain", "image_quality_issue", "unknown"} and severity != "none"
 
     return {
         **item,
+        "side": side,
         "finding_type": finding_type,
         "severity": severity,
+        "confirmed": bool(confirmed),
+        "uncertainty_reason": item.get("uncertainty_reason"),
+        "photo_quality_issue": photo_quality_issue,
         "confidence": normalize_confidence(item.get("confidence")),
         "bbox": normalize_bbox(item.get("bbox")),
         "grade_impact": grade_impact,
@@ -643,7 +714,7 @@ def save_repair_response(session: Session, analysis_run_id: int, content: str) -
     )
 
 
-def save_findings(session: Session, analysis_run: AnalysisRun, data: dict[str, Any]) -> None:
+def save_findings(session: Session, analysis_run: AnalysisRun, data: dict[str, Any], default_side: str = "unknown") -> None:
     for item in data.get("findings", []):
         bbox = item.get("bbox") or {}
         session.add(
@@ -661,11 +732,15 @@ def save_findings(session: Session, analysis_run: AnalysisRun, data: dict[str, A
                 title=item.get("title"),
                 description=item.get("description"),
                 grade_impact=item.get("grade_impact"),
+                side=item.get("side") or default_side,
+                confirmed=item.get("confirmed"),
+                uncertainty_reason=item.get("uncertainty_reason"),
+                photo_quality_issue=item.get("photo_quality_issue"),
             )
         )
 
 
-def dry_run_local_ai(session: Session, owned_card_id: int) -> dict[str, Any]:
+def dry_run_local_ai(session: Session, owned_card_id: int, pass_type: str = "fast") -> dict[str, Any]:
     owned_card = session.get(OwnedCard, owned_card_id)
     if owned_card is None:
         raise HTTPException(status_code=404, detail="Owned card not found")
@@ -675,10 +750,13 @@ def dry_run_local_ai(session: Session, owned_card_id: int) -> dict[str, Any]:
     opencv_run = latest_completed_opencv_run(session, owned_card_id)
     if opencv_run is None:
         raise HTTPException(status_code=400, detail="Run OpenCV analysis before local AI analysis.")
-    assets = collect_assets(session, opencv_run.id)
+    if pass_type == "full":
+        assets = collect_assets_for_pass(session, opencv_run.id, "front") + collect_assets_for_pass(session, opencv_run.id, "back")
+    else:
+        assets = collect_assets_for_pass(session, opencv_run.id, pass_type)
     if not assets:
         raise HTTPException(status_code=400, detail="No OpenCV assets found for local AI analysis.")
-    prompt = build_prompt(card, opencv_measurements(session, opencv_run))
+    prompt = build_prompt(card, opencv_measurements(session, opencv_run), pass_type)
     return {
         "config": local_ai_config(),
         "opencv_analysis_run_id": opencv_run.id,
@@ -797,7 +875,7 @@ def local_ai_debug_single_image(session: Session, owned_card_id: int) -> dict[st
         }
 
 
-def run_local_ai_fast(session: Session, owned_card_id: int) -> dict[str, Any]:
+def run_local_ai_pass(session: Session, owned_card_id: int, pass_type: str = "fast") -> dict[str, Any]:
     owned_card = session.get(OwnedCard, owned_card_id)
     if owned_card is None:
         raise HTTPException(status_code=404, detail="Owned card not found")
@@ -810,18 +888,18 @@ def run_local_ai_fast(session: Session, owned_card_id: int) -> dict[str, Any]:
     opencv_run = latest_completed_opencv_run(session, owned_card_id)
     if opencv_run is None:
         raise HTTPException(status_code=400, detail="Run OpenCV analysis before local AI analysis.")
-    assets = collect_assets(session, opencv_run.id)
+    assets = collect_assets_for_pass(session, opencv_run.id, pass_type)
     if not assets:
-        raise HTTPException(status_code=400, detail="No OpenCV assets found for local AI analysis.")
+        raise HTTPException(status_code=400, detail=f"No {pass_type} OpenCV assets found for local AI analysis.")
 
     analysis_run = AnalysisRun(
         owned_card_id=owned_card_id,
-        mode="local_ai_fast",
+        mode=f"local_ai_{pass_type}",
         status="running",
         model_provider=LOCAL_AI_PROVIDER,
         model_name=LOCAL_AI_MODEL_NAME,
         prompt_version=LOCAL_AI_PROMPT_VERSION,
-        analysis_version=LOCAL_AI_ANALYSIS_VERSION,
+        analysis_version=f"local_ai_{pass_type}_v1",
     )
     session.add(analysis_run)
     session.commit()
@@ -831,7 +909,7 @@ def run_local_ai_fast(session: Session, owned_card_id: int) -> dict[str, Any]:
     parsed_data: dict[str, Any] | None = None
     try:
         raw_response, full_response, parsed_from_reasoning_content = call_openai_compatible(
-            build_prompt(card, opencv_measurements(session, opencv_run)),
+            build_prompt(card, opencv_measurements(session, opencv_run), pass_type),
             assets,
         )
         if not raw_response.strip():
@@ -851,7 +929,7 @@ def run_local_ai_fast(session: Session, owned_card_id: int) -> dict[str, Any]:
         data["parsed_from_reasoning_content"] = parsed_from_reasoning_content
         parsed_data = data
         save_debug_artifacts(session, analysis_run.id, full_response, parsed_data)
-        save_findings(session, analysis_run, data)
+        save_findings(session, analysis_run, data, pass_type if pass_type in {"front", "back"} else "unknown")
         analysis_run.status = "completed"
         analysis_run.human_summary = data.get("overall_visual_condition")
         analysis_run.confidence_level = data.get("confidence_level", "low")
@@ -916,3 +994,118 @@ def run_local_ai_fast(session: Session, owned_card_id: int) -> dict[str, Any]:
         session.commit()
         session.refresh(analysis_run)
         raise HTTPException(status_code=502, detail=f"Local AI analysis failed: {exc}") from exc
+
+
+def run_local_ai_fast(session: Session, owned_card_id: int) -> dict[str, Any]:
+    return run_local_ai_pass(session, owned_card_id, "fast")
+
+
+def latest_completed_run_by_mode(session: Session, owned_card_id: int, mode: str) -> AnalysisRun | None:
+    return session.exec(
+        select(AnalysisRun)
+        .where(AnalysisRun.owned_card_id == owned_card_id)
+        .where(AnalysisRun.mode == mode)
+        .where(AnalysisRun.status == "completed")
+        .order_by(AnalysisRun.created_at.desc(), AnalysisRun.id.desc())
+    ).first()
+
+
+def findings_for_run(session: Session, analysis_run_id: int) -> list[AnalysisFinding]:
+    return session.exec(
+        select(AnalysisFinding)
+        .where(AnalysisFinding.analysis_run_id == analysis_run_id)
+        .order_by(AnalysisFinding.created_at, AnalysisFinding.id)
+    ).all()
+
+
+def copy_findings_to_run(session: Session, source_findings: list[AnalysisFinding], target_run_id: int) -> None:
+    for finding in source_findings:
+        session.add(
+            AnalysisFinding(
+                analysis_run_id=target_run_id,
+                media_id=finding.media_id,
+                finding_type=finding.finding_type,
+                severity=finding.severity,
+                confidence=finding.confidence,
+                location_label=finding.location_label,
+                bbox_x=finding.bbox_x,
+                bbox_y=finding.bbox_y,
+                bbox_width=finding.bbox_width,
+                bbox_height=finding.bbox_height,
+                title=finding.title,
+                description=finding.description,
+                grade_impact=finding.grade_impact,
+                side=finding.side,
+                confirmed=finding.confirmed,
+                uncertainty_reason=finding.uncertainty_reason,
+                photo_quality_issue=finding.photo_quality_issue,
+            )
+        )
+
+
+def run_local_ai_aggregate(session: Session, owned_card_id: int) -> dict[str, Any]:
+    owned_card = session.get(OwnedCard, owned_card_id)
+    if owned_card is None:
+        raise HTTPException(status_code=404, detail="Owned card not found")
+
+    front_run = latest_completed_run_by_mode(session, owned_card_id, "local_ai_front")
+    back_run = latest_completed_run_by_mode(session, owned_card_id, "local_ai_back")
+    if front_run is None and back_run is None:
+        raise HTTPException(status_code=400, detail="Run front or back Local AI analysis before aggregate.")
+
+    opencv_run = latest_completed_opencv_run(session, owned_card_id)
+    centering_score = opencv_run.centering_score if opencv_run else None
+    aggregate_run = AnalysisRun(
+        owned_card_id=owned_card_id,
+        mode="local_ai_aggregate",
+        status="completed",
+        model_provider=LOCAL_AI_PROVIDER,
+        model_name=LOCAL_AI_MODEL_NAME,
+        prompt_version="local_vision_aggregate_v1",
+        analysis_version="local_ai_aggregate_v1",
+        centering_score=centering_score,
+        confidence_level="medium",
+        recommendation="local_ai_aggregate_completed",
+        completed_at=datetime.utcnow(),
+    )
+    session.add(aggregate_run)
+    session.commit()
+    session.refresh(aggregate_run)
+
+    source_findings: list[AnalysisFinding] = []
+    if front_run is not None:
+        source_findings.extend(findings_for_run(session, front_run.id))
+    if back_run is not None:
+        source_findings.extend(findings_for_run(session, back_run.id))
+    copy_findings_to_run(session, source_findings, aggregate_run.id)
+    session.commit()
+
+    from .scoring import score_analysis_run
+    from .reporting import build_analysis_report
+
+    aggregate_run = score_analysis_run(session, aggregate_run.id)
+    return {
+        "analysis_run": aggregate_run,
+        "front_run_id": front_run.id if front_run else None,
+        "back_run_id": back_run.id if back_run else None,
+        "finding_count": len(source_findings),
+        "report": build_analysis_report(session, aggregate_run.id),
+    }
+
+
+def pass_has_assets(session: Session, owned_card_id: int, pass_type: str) -> bool:
+    opencv_run = latest_completed_opencv_run(session, owned_card_id)
+    if opencv_run is None:
+        return False
+    return bool(collect_assets_for_pass(session, opencv_run.id, pass_type))
+
+
+def run_local_ai_full_review(session: Session, owned_card_id: int) -> dict[str, Any]:
+    front_result = run_local_ai_pass(session, owned_card_id, "front") if pass_has_assets(session, owned_card_id, "front") else None
+    back_result = run_local_ai_pass(session, owned_card_id, "back") if pass_has_assets(session, owned_card_id, "back") else None
+    aggregate = run_local_ai_aggregate(session, owned_card_id)
+    return {
+        "front": front_result,
+        "back": back_result,
+        "aggregate": aggregate,
+    }

@@ -7,6 +7,9 @@ from sqlmodel import Session, select
 from ..config import MEDIA_DIR, ROOT
 from ..models import AnalysisAsset, AnalysisFinding, AnalysisRun, CardMedia
 
+PHYSICAL_FINDING_TYPES = {"corner_whitening", "edge_whitening", "scratch", "print_line", "dent", "stain", "surface_wear"}
+NON_ANNOTATED_FINDING_TYPES = {"glare_uncertain", "image_quality_issue", "unknown"}
+
 
 def safe_project_path(relative_path: str) -> Path:
     path = (ROOT / relative_path).resolve()
@@ -117,6 +120,19 @@ def bbox_region(finding: AnalysisFinding, width: int, height: int) -> tuple[int,
     return None
 
 
+def has_valid_bbox(finding: AnalysisFinding) -> bool:
+    return bool((finding.bbox_width or 0) > 0 and (finding.bbox_height or 0) > 0)
+
+
+def should_annotate_finding(finding: AnalysisFinding) -> bool:
+    finding_type = (finding.finding_type or "unknown").lower()
+    if has_valid_bbox(finding):
+        return finding_type not in NON_ANNOTATED_FINDING_TYPES or bool(finding.confirmed)
+    if finding_type in NON_ANNOTATED_FINDING_TYPES:
+        return False
+    return finding_type in PHYSICAL_FINDING_TYPES and finding.confirmed is not False
+
+
 def fallback_region(finding: AnalysisFinding, width: int, height: int) -> tuple[int, int, int, int]:
     text = " ".join(str(value or "").lower() for value in [finding.location_label, finding.title, finding.description])
     corner_w = max(1, int(width * 0.28))
@@ -188,6 +204,8 @@ def generate_annotations(session: Session, analysis_run_id: int) -> dict:
 
     for index, finding in enumerate(findings, start=1):
         if finding.id is None:
+            continue
+        if not should_annotate_finding(finding):
             continue
         existing = existing_annotation(session, analysis_run_id, finding.id)
         if existing is not None and safe_project_path(existing.file_path).is_file():

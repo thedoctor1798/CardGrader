@@ -78,13 +78,19 @@ def finding_penalty(finding: AnalysisFinding) -> float:
 def is_uncertain_only(finding: AnalysisFinding) -> bool:
     finding_type = (finding.finding_type or "unknown").lower()
     severity = (finding.severity or "none").lower()
-    return finding_type in UNCERTAIN_FINDINGS and severity not in {"moderate", "severe"}
+    return (
+        finding_type in UNCERTAIN_FINDINGS
+        or finding.photo_quality_issue is True
+        or finding.confirmed is False
+    ) and severity not in {"moderate", "severe"}
 
 
 def is_confirmed_grade_limiter(finding: AnalysisFinding) -> bool:
     finding_type = (finding.finding_type or "unknown").lower()
     severity = (finding.severity or "none").lower()
     if severity in {"none", ""}:
+        return False
+    if finding.confirmed is False:
         return False
     if finding_type in UNCERTAIN_FINDINGS:
         return severity in {"moderate", "severe"}
@@ -104,6 +110,12 @@ def apply_finding_penalties(
         penalty = finding_penalty(finding)
         if penalty <= 0:
             continue
+        if finding.confirmed is False and not (
+            finding_type in UNCERTAIN_FINDINGS
+            and (finding.severity or "").lower() in {"moderate", "severe"}
+            and (finding.grade_impact or "").lower() in {"medium", "high"}
+        ):
+            continue
         if finding_type in CORNER_FINDINGS:
             corners_score -= penalty
         elif finding_type in EDGE_FINDINGS:
@@ -111,7 +123,7 @@ def apply_finding_penalties(
         elif finding_type in SURFACE_FINDINGS:
             surface_score -= penalty
         elif finding_type in UNCERTAIN_FINDINGS:
-            surface_score -= penalty * 0.5
+            surface_score -= penalty * 0.25
     return max(1.0, corners_score), max(1.0, edges_score), max(1.0, surface_score)
 
 

@@ -51,6 +51,10 @@ class AnalysisFindingRead(SQLModel):
     title: Optional[str] = None
     description: Optional[str] = None
     grade_impact: Optional[str] = None
+    side: Optional[str] = None
+    confirmed: Optional[bool] = None
+    uncertainty_reason: Optional[str] = None
+    photo_quality_issue: Optional[bool] = None
     created_at: datetime
 
 

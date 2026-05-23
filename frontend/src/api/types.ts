@@ -138,6 +138,10 @@ export type AnalysisFinding = {
   title?: string | null;
   description?: string | null;
   grade_impact?: string | null;
+  side?: "front" | "back" | "unknown" | null;
+  confirmed?: boolean | null;
+  uncertainty_reason?: string | null;
+  photo_quality_issue?: boolean | null;
   created_at: string;
 };
 
