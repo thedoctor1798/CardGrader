@@ -20,6 +20,17 @@ pip install -r backend\requirements.txt
 
 The backend will run on http://localhost:8710 and expose a health endpoint at `/api/health`.
 
+Frontend quick start:
+
+```powershell
+cd frontend
+npm install
+$env:VITE_API_BASE_URL="http://127.0.0.1:8710"
+npm run dev
+```
+
+The frontend will run on http://127.0.0.1:5173 and talks only to the local backend.
+
 Notes:
 - Database: `data/cardgrader.db`
 - Media folders are created under `media/` (`originals`, `resized`, `crops`, `annotated`, `video_frames`, `reports`).
