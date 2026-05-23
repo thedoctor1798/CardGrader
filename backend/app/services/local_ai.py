@@ -220,7 +220,7 @@ def collect_assets(session: Session, opencv_run_id: int) -> list[AnalysisAsset]:
             asset.created_at,
             asset.id or 0,
         ),
-    )[:10]
+    )[:1]
 
 
 def selected_asset_labels(assets: list[AnalysisAsset]) -> list[str]:

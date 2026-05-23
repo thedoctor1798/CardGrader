@@ -5,3 +5,4 @@ sqlalchemy>=2.0
 pillow>=10.0
 opencv-python>=4.7
 python-multipart
+python-dotenv

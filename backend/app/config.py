@@ -1,8 +1,22 @@
 from pathlib import Path
 import os
 
-# workspace root (E:/CardGrader)
+try:
+    from dotenv import load_dotenv
+except ImportError:
+    load_dotenv = None
+
+# workspace root: E:/CardGrader
 ROOT = Path(__file__).resolve().parents[2]
+
+# backend root: E:/CardGrader/backend
+BACKEND_DIR = Path(__file__).resolve().parents[1]
+
+# Load backend/.env and optional project root .env before reading os.getenv values.
+# This keeps config local-only and avoids requiring system-wide env vars.
+if load_dotenv is not None:
+    load_dotenv(BACKEND_DIR / ".env", override=False)
+    load_dotenv(ROOT / ".env", override=False)
 
 HOST = "127.0.0.1"
 PORT = 8710
@@ -10,8 +24,26 @@ PORT = 8710
 DATA_DIR = ROOT / "data"
 MEDIA_DIR = ROOT / "media"
 
-LOCAL_AI_ENABLED = os.getenv("LOCAL_AI_ENABLED", "false").lower() == "true"
+
+def get_bool_env(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"true", "1", "yes", "y", "on"}
+
+
+def get_int_env(name: str, default: int) -> int:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return int(value)
+    except ValueError:
+        return default
+
+
+LOCAL_AI_ENABLED = get_bool_env("LOCAL_AI_ENABLED", False)
 LOCAL_AI_PROVIDER = os.getenv("LOCAL_AI_PROVIDER", "lmstudio")
 LOCAL_AI_BASE_URL = os.getenv("LOCAL_AI_BASE_URL", "http://127.0.0.1:1234/v1")
 LOCAL_AI_MODEL_NAME = os.getenv("LOCAL_AI_MODEL_NAME", "")
-LOCAL_AI_TIMEOUT_SECONDS = int(os.getenv("LOCAL_AI_TIMEOUT_SECONDS", "120"))
+LOCAL_AI_TIMEOUT_SECONDS = get_int_env("LOCAL_AI_TIMEOUT_SECONDS", 120)
