@@ -277,10 +277,12 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
     ? "Előbb futtasd az OpenCV elemzést."
     : !localAI?.enabled
       ? "Local AI nincs bekapcsolva."
+      : localAI.mode === "remote_worker"
+        ? "Remote worker mód elő van készítve, de az elemzés átadása még nincs bekötve."
       : !localAI.model_name
         ? "LOCAL_AI_MODEL_NAME nincs beállítva."
         : !localAI.reachable
-          ? "LM Studio nem érhető el."
+          ? localAI.mode === "server_local" ? "LM Studio nem érhető el." : "Local AI worker nem érhető el."
           : null;
 
   const setScopedSuccess = (scope: NoticeScope, text: string) => setNotice({ scope, tone: "success", text });
@@ -852,7 +854,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
         </div>
 
         <div className="space-y-4">
-          <Panel title="Képi elemzés" subtitle="OpenCV előfeldolgozás és localhost-only Local AI opcionális elemzés.">
+          <Panel title="Képi elemzés" subtitle="OpenCV előfeldolgozás és Local AI elemzés server-local vagy később remote worker módban.">
             <div className="grid gap-3 md:grid-cols-3">
               <button className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-60" disabled={busy} onClick={runAnalysis} type="button">
                 <Play size={16} /> {busyLabel === "Elemzés fut..." ? "Elemzés fut..." : "OpenCV elemzés indítása"}

@@ -303,31 +303,42 @@ export type CleanupGeneratedMediaResponse = {
 };
 
 export type LocalAIStatus = {
+  mode: "disabled" | "server_local" | "remote_worker" | string;
   enabled: boolean;
   provider: string;
   base_url: string;
+  worker_base_url?: string | null;
   model_name?: string | null;
   is_localhost: boolean;
   reachable: boolean;
+  worker_reachable?: boolean;
   vision_capable: string;
+  server_role?: string;
+  client_role?: string;
   message: string;
 };
 
 export type LocalAIConfig = {
+  mode: "disabled" | "server_local" | "remote_worker" | string;
   enabled: boolean;
   provider: string;
   base_url: string;
+  worker_base_url?: string | null;
   model_name?: string | null;
   timeout_seconds: number;
   max_images: number;
   max_tokens: number;
   disable_thinking: boolean;
   is_localhost: boolean;
+  server_role?: string;
+  client_role?: string;
 };
 
 export type LocalAITestConnection = {
   ok: boolean;
   reachable: boolean;
+  mode?: string;
+  worker_reachable?: boolean;
   models: string[];
   selected_model?: string | null;
   selected_model_found: boolean;

@@ -18,9 +18,11 @@ from ..config import (
     LOCAL_AI_ENABLED,
     LOCAL_AI_MAX_IMAGES,
     LOCAL_AI_MAX_TOKENS,
+    LOCAL_AI_MODE,
     LOCAL_AI_MODEL_NAME,
     LOCAL_AI_PROVIDER,
     LOCAL_AI_TIMEOUT_SECONDS,
+    LOCAL_AI_WORKER_BASE_URL,
     MEDIA_DIR,
     ROOT,
 )
@@ -65,30 +67,11 @@ def is_localhost_url(base_url: str) -> bool:
 
 
 def local_ai_config() -> dict[str, Any]:
-    return {
-        "enabled": LOCAL_AI_ENABLED,
-        "provider": LOCAL_AI_PROVIDER,
-        "base_url": LOCAL_AI_BASE_URL,
-        "model_name": LOCAL_AI_MODEL_NAME,
-        "timeout_seconds": LOCAL_AI_TIMEOUT_SECONDS,
-        "max_images": LOCAL_AI_MAX_IMAGES,
-        "max_tokens": LOCAL_AI_MAX_TOKENS,
-        "disable_thinking": LOCAL_AI_DISABLE_THINKING,
-        "is_localhost": is_localhost_url(LOCAL_AI_BASE_URL),
-    }
+    return active_local_ai_provider().config()
 
 
 def require_local_ai_enabled() -> None:
-    if not LOCAL_AI_ENABLED:
-        raise HTTPException(status_code=400, detail="Local AI is disabled.")
-    if not is_localhost_url(LOCAL_AI_BASE_URL):
-        raise HTTPException(status_code=400, detail="LOCAL_AI_BASE_URL must be localhost.")
-    if not LOCAL_AI_MODEL_NAME:
-        raise HTTPException(status_code=400, detail="LOCAL_AI_MODEL_NAME is not configured.")
-    if LOCAL_AI_PROVIDER.lower() == "ollama":
-        raise HTTPException(status_code=400, detail="Ollama provider not implemented yet.")
-    if LOCAL_AI_PROVIDER.lower() not in {"lmstudio", "llamacpp", "openai-compatible"}:
-        raise HTTPException(status_code=400, detail="Unsupported local AI provider.")
+    active_local_ai_provider().require_ready()
 
 
 def http_json(method: str, url: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -126,83 +109,323 @@ def models_from_response(response: dict[str, Any]) -> list[str]:
     return []
 
 
-def test_local_ai_connection() -> dict[str, Any]:
-    if not LOCAL_AI_ENABLED:
+class LocalAIProvider:
+    mode = "disabled"
+    server_role = "server_app"
+    client_role = "none"
+
+    @property
+    def base_url(self) -> str:
+        return LOCAL_AI_BASE_URL
+
+    @property
+    def worker_base_url(self) -> str | None:
+        return LOCAL_AI_WORKER_BASE_URL.strip() or None
+
+    @property
+    def is_localhost(self) -> bool:
+        return is_localhost_url(self.base_url)
+
+    def config(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode,
+            "enabled": LOCAL_AI_ENABLED,
+            "provider": LOCAL_AI_PROVIDER,
+            "base_url": self.base_url,
+            "worker_base_url": self.worker_base_url,
+            "model_name": LOCAL_AI_MODEL_NAME,
+            "timeout_seconds": LOCAL_AI_TIMEOUT_SECONDS,
+            "max_images": LOCAL_AI_MAX_IMAGES,
+            "max_tokens": LOCAL_AI_MAX_TOKENS,
+            "disable_thinking": LOCAL_AI_DISABLE_THINKING,
+            "is_localhost": self.is_localhost,
+            "server_role": self.server_role,
+            "client_role": self.client_role,
+        }
+
+    def status(self) -> dict[str, Any]:
+        return {
+            "mode": self.mode,
+            "enabled": LOCAL_AI_ENABLED,
+            "provider": LOCAL_AI_PROVIDER,
+            "base_url": self.base_url,
+            "worker_base_url": self.worker_base_url,
+            "model_name": LOCAL_AI_MODEL_NAME,
+            "is_localhost": self.is_localhost,
+            "reachable": False,
+            "worker_reachable": False,
+            "vision_capable": "unknown",
+            "server_role": self.server_role,
+            "client_role": self.client_role,
+            "message": "Local AI is disabled.",
+        }
+
+    def test_connection(self) -> dict[str, Any]:
         return {
             "ok": False,
             "reachable": False,
+            "mode": self.mode,
+            "worker_reachable": False,
             "models": [],
             "selected_model": LOCAL_AI_MODEL_NAME,
             "selected_model_found": False,
             "message": "Local AI is disabled.",
         }
-    if not is_localhost_url(LOCAL_AI_BASE_URL):
-        raise HTTPException(status_code=400, detail="LOCAL_AI_BASE_URL must be localhost.")
-    if LOCAL_AI_PROVIDER.lower() == "ollama":
-        return {
-            "ok": False,
-            "reachable": False,
-            "models": [],
-            "selected_model": LOCAL_AI_MODEL_NAME,
-            "selected_model_found": False,
-            "message": "Ollama provider not implemented yet.",
+
+    def require_ready(self) -> None:
+        raise HTTPException(status_code=400, detail="Local AI is disabled.")
+
+    def call_chat(self, prompt: str, assets: list[AnalysisAsset]) -> tuple[str, str, bool]:
+        raise HTTPException(status_code=400, detail="Local AI is disabled.")
+
+    def call_text_repair(self, raw_output: str) -> tuple[str, str]:
+        raise HTTPException(status_code=400, detail="Local AI is disabled.")
+
+
+class LMStudioDirectProvider(LocalAIProvider):
+    mode = "server_local"
+    server_role = "backend_host_with_local_model_access"
+    client_role = "same_machine_lm_studio"
+
+    def _unsupported_provider_message(self) -> str | None:
+        provider = LOCAL_AI_PROVIDER.lower()
+        if provider == "ollama":
+            return "Ollama provider not implemented yet."
+        if provider not in {"lmstudio", "llamacpp", "openai-compatible"}:
+            return "Unsupported local AI provider."
+        return None
+
+    def require_ready(self) -> None:
+        if not LOCAL_AI_ENABLED:
+            raise HTTPException(status_code=400, detail="Local AI is disabled.")
+        if not self.is_localhost:
+            raise HTTPException(status_code=400, detail="LOCAL_AI_BASE_URL must be localhost in server_local mode.")
+        if not LOCAL_AI_MODEL_NAME:
+            raise HTTPException(status_code=400, detail="LOCAL_AI_MODEL_NAME is not configured.")
+        unsupported_message = self._unsupported_provider_message()
+        if unsupported_message:
+            raise HTTPException(status_code=400, detail=unsupported_message)
+
+    def test_connection(self) -> dict[str, Any]:
+        if not LOCAL_AI_ENABLED:
+            return super().test_connection()
+        unsupported_message = self._unsupported_provider_message()
+        if unsupported_message:
+            return {
+                "ok": False,
+                "reachable": False,
+                "mode": self.mode,
+                "worker_reachable": False,
+                "models": [],
+                "selected_model": LOCAL_AI_MODEL_NAME,
+                "selected_model_found": False,
+                "message": unsupported_message,
+            }
+        if not self.is_localhost:
+            raise HTTPException(status_code=400, detail="LOCAL_AI_BASE_URL must be localhost in server_local mode.")
+        try:
+            response = http_json("GET", f"{self.base_url.rstrip('/')}/models")
+            models = models_from_response(response)
+            selected_model_found = LOCAL_AI_MODEL_NAME in models
+            return {
+                "ok": selected_model_found if LOCAL_AI_MODEL_NAME else True,
+                "reachable": True,
+                "mode": self.mode,
+                "worker_reachable": True,
+                "models": models,
+                "selected_model": LOCAL_AI_MODEL_NAME,
+                "selected_model_found": selected_model_found,
+                "message": (
+                    "Local AI server is reachable."
+                    if selected_model_found or not LOCAL_AI_MODEL_NAME
+                    else "Local AI server is reachable, but selected model is not loaded."
+                ),
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "reachable": False,
+                "mode": self.mode,
+                "worker_reachable": False,
+                "models": [],
+                "selected_model": LOCAL_AI_MODEL_NAME,
+                "selected_model_found": False,
+                "message": f"Local AI server is not reachable: {exc}",
+            }
+
+    def status(self) -> dict[str, Any]:
+        status = super().status()
+        status["message"] = "Local AI is disabled."
+        if not LOCAL_AI_ENABLED:
+            return status
+        status["message"] = "Local AI server_local mode is configured."
+        unsupported_message = self._unsupported_provider_message()
+        if unsupported_message:
+            status["message"] = unsupported_message
+            return status
+        if not self.is_localhost:
+            status["message"] = "LOCAL_AI_BASE_URL must be localhost in server_local mode."
+            return status
+
+        try:
+            http_json("GET", f"{self.base_url.rstrip('/')}/models")
+            status["reachable"] = True
+            status["worker_reachable"] = True
+            status["message"] = "Local AI server is reachable."
+        except Exception as exc:
+            status["message"] = f"Local AI server is not reachable: {exc}"
+        return status
+
+    def call_chat(self, prompt: str, assets: list[AnalysisAsset]) -> tuple[str, str, bool]:
+        messages_content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
+        messages_content.extend(data_url_for_asset(asset) for asset in assets)
+        payload = {
+            "model": LOCAL_AI_MODEL_NAME,
+            "messages": [{"role": "user", "content": messages_content}],
+            "temperature": 0,
+            "max_tokens": LOCAL_AI_MAX_TOKENS,
         }
-    try:
-        response = http_json("GET", f"{LOCAL_AI_BASE_URL.rstrip('/')}/models")
-        models = models_from_response(response)
-        selected_model_found = LOCAL_AI_MODEL_NAME in models
-        return {
-            "ok": selected_model_found if LOCAL_AI_MODEL_NAME else True,
-            "reachable": True,
-            "models": models,
-            "selected_model": LOCAL_AI_MODEL_NAME,
-            "selected_model_found": selected_model_found,
-            "message": (
-                "Local AI server is reachable."
-                if selected_model_found or not LOCAL_AI_MODEL_NAME
-                else "Local AI server is reachable, but selected model is not loaded."
-            ),
+        response = http_json("POST", f"{self.base_url.rstrip('/')}/chat/completions", payload)
+        content, parsed_from_reasoning_content = content_from_chat_response(response)
+        return content, json.dumps(response, ensure_ascii=False, indent=2), parsed_from_reasoning_content
+
+    def call_text_repair(self, raw_output: str) -> tuple[str, str]:
+        prompt = (
+            "Convert the following model output into the required JSON schema. Return JSON only. "
+            "Start with { and end with }.\n\n"
+            f"{raw_output}"
+        )
+        payload = {
+            "model": LOCAL_AI_MODEL_NAME,
+            "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
+            "temperature": 0,
+            "max_tokens": LOCAL_AI_MAX_TOKENS,
         }
-    except Exception as exc:
-        return {
-            "ok": False,
-            "reachable": False,
-            "models": [],
-            "selected_model": LOCAL_AI_MODEL_NAME,
-            "selected_model_found": False,
-            "message": f"Local AI server is not reachable: {exc}",
-        }
+        response = http_json("POST", f"{self.base_url.rstrip('/')}/chat/completions", payload)
+        content, _ = content_from_chat_response(response)
+        return content, json.dumps(response, ensure_ascii=False, indent=2)
+
+
+class RemoteWorkerProvider(LocalAIProvider):
+    mode = "remote_worker"
+    server_role = "server_hosted_app"
+    client_role = "gamer_pc_local_ai_worker"
+
+    @property
+    def base_url(self) -> str:
+        return self.worker_base_url or ""
+
+    @property
+    def is_localhost(self) -> bool:
+        return is_localhost_url(self.base_url) if self.base_url else False
+
+    def config(self) -> dict[str, Any]:
+        config = super().config()
+        config["provider"] = "remote_worker"
+        return config
+
+    def _worker_status(self) -> dict[str, Any]:
+        if not self.worker_base_url:
+            raise ValueError("LOCAL_AI_WORKER_BASE_URL is not configured.")
+        base = self.worker_base_url.rstrip("/")
+        last_error: Exception | None = None
+        for path in ["/api/local-ai/status", "/api/health", "/health"]:
+            try:
+                return http_json("GET", f"{base}{path}")
+            except Exception as exc:
+                last_error = exc
+        raise ValueError(f"Remote Local AI worker is not reachable: {last_error}")
+
+    def status(self) -> dict[str, Any]:
+        status = super().status()
+        status["provider"] = "remote_worker"
+        status["message"] = "Remote Local AI worker mode is configured."
+        if not LOCAL_AI_ENABLED:
+            status["message"] = "Local AI is disabled."
+            return status
+        if not self.worker_base_url:
+            status["message"] = "LOCAL_AI_WORKER_BASE_URL is not configured."
+            return status
+        try:
+            worker_status = self._worker_status()
+            worker_model = worker_status.get("model_name") or worker_status.get("model") or LOCAL_AI_MODEL_NAME
+            status["reachable"] = True
+            status["worker_reachable"] = True
+            status["model_name"] = worker_model
+            status["vision_capable"] = str(worker_status.get("vision_capable") or "unknown")
+            status["message"] = "Remote Local AI worker is reachable over the configured URL."
+        except Exception as exc:
+            status["message"] = str(exc)
+        return status
+
+    def test_connection(self) -> dict[str, Any]:
+        if not LOCAL_AI_ENABLED:
+            return super().test_connection()
+        try:
+            worker_status = self._worker_status()
+            model = str(worker_status.get("model_name") or worker_status.get("model") or LOCAL_AI_MODEL_NAME or "")
+            raw_models = worker_status.get("models")
+            models = [str(item) for item in raw_models] if isinstance(raw_models, list) else ([model] if model else [])
+            selected_model_found = not LOCAL_AI_MODEL_NAME or LOCAL_AI_MODEL_NAME in models or LOCAL_AI_MODEL_NAME == model
+            return {
+                "ok": selected_model_found,
+                "reachable": True,
+                "mode": self.mode,
+                "worker_reachable": True,
+                "models": models,
+                "selected_model": LOCAL_AI_MODEL_NAME,
+                "selected_model_found": selected_model_found,
+                "message": "Remote Local AI worker is reachable.",
+            }
+        except Exception as exc:
+            return {
+                "ok": False,
+                "reachable": False,
+                "mode": self.mode,
+                "worker_reachable": False,
+                "models": [],
+                "selected_model": LOCAL_AI_MODEL_NAME,
+                "selected_model_found": False,
+                "message": str(exc),
+            }
+
+    def require_ready(self) -> None:
+        if not LOCAL_AI_ENABLED:
+            raise HTTPException(status_code=400, detail="Local AI is disabled.")
+        if not self.worker_base_url:
+            raise HTTPException(status_code=400, detail="LOCAL_AI_WORKER_BASE_URL is not configured.")
+        raise HTTPException(
+            status_code=501,
+            detail="Remote Local AI worker analysis handoff is prepared but not implemented yet.",
+        )
+
+    def call_chat(self, prompt: str, assets: list[AnalysisAsset]) -> tuple[str, str, bool]:
+        raise HTTPException(
+            status_code=501,
+            detail="Remote Local AI worker analysis handoff is prepared but not implemented yet.",
+        )
+
+    def call_text_repair(self, raw_output: str) -> tuple[str, str]:
+        raise HTTPException(
+            status_code=501,
+            detail="Remote Local AI worker analysis handoff is prepared but not implemented yet.",
+        )
+
+
+def active_local_ai_provider() -> LocalAIProvider:
+    if LOCAL_AI_MODE == "server_local":
+        return LMStudioDirectProvider()
+    if LOCAL_AI_MODE == "remote_worker":
+        return RemoteWorkerProvider()
+    return LocalAIProvider()
+
+
+def test_local_ai_connection() -> dict[str, Any]:
+    return active_local_ai_provider().test_connection()
 
 
 def local_ai_status() -> dict[str, Any]:
-    base = LOCAL_AI_BASE_URL.rstrip("/")
-    is_local = is_localhost_url(base)
-    status = {
-        "enabled": LOCAL_AI_ENABLED,
-        "provider": LOCAL_AI_PROVIDER,
-        "base_url": LOCAL_AI_BASE_URL,
-        "model_name": LOCAL_AI_MODEL_NAME,
-        "is_localhost": is_local,
-        "reachable": False,
-        "vision_capable": "unknown",
-        "message": "Local AI is disabled.",
-    }
-    if not LOCAL_AI_ENABLED:
-        return status
-    if not is_local:
-        status["message"] = "LOCAL_AI_BASE_URL must be localhost."
-        return status
-    if LOCAL_AI_PROVIDER.lower() == "ollama":
-        status["message"] = "Ollama provider not implemented yet."
-        return status
-
-    try:
-        http_json("GET", f"{base}/models")
-        status["reachable"] = True
-        status["message"] = "Local AI server is reachable."
-    except Exception as exc:
-        status["message"] = f"Local AI server is not reachable: {exc}"
-    return status
+    return active_local_ai_provider().status()
 
 
 def latest_completed_opencv_run(session: Session, owned_card_id: int) -> AnalysisRun | None:
@@ -568,34 +791,11 @@ def reasoning_content_from_response(response: dict[str, Any]) -> str:
 
 
 def call_openai_compatible(prompt: str, assets: list[AnalysisAsset]) -> tuple[str, str, bool]:
-    messages_content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
-    messages_content.extend(data_url_for_asset(asset) for asset in assets)
-    payload = {
-        "model": LOCAL_AI_MODEL_NAME,
-        "messages": [{"role": "user", "content": messages_content}],
-        "temperature": 0,
-        "max_tokens": LOCAL_AI_MAX_TOKENS,
-    }
-    response = http_json("POST", f"{LOCAL_AI_BASE_URL.rstrip('/')}/chat/completions", payload)
-    content, parsed_from_reasoning_content = content_from_chat_response(response)
-    return content, json.dumps(response, ensure_ascii=False, indent=2), parsed_from_reasoning_content
+    return active_local_ai_provider().call_chat(prompt, assets)
 
 
 def call_text_only_repair(raw_output: str) -> tuple[str, str]:
-    prompt = (
-        "Convert the following model output into the required JSON schema. Return JSON only. "
-        "Start with { and end with }.\n\n"
-        f"{raw_output}"
-    )
-    payload = {
-        "model": LOCAL_AI_MODEL_NAME,
-        "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
-        "temperature": 0,
-        "max_tokens": LOCAL_AI_MAX_TOKENS,
-    }
-    response = http_json("POST", f"{LOCAL_AI_BASE_URL.rstrip('/')}/chat/completions", payload)
-    content, _ = content_from_chat_response(response)
-    return content, json.dumps(response, ensure_ascii=False, indent=2)
+    return active_local_ai_provider().call_text_repair(raw_output)
 
 
 def parse_with_optional_repair(session: Session, analysis_run_id: int, content: str) -> tuple[dict[str, Any], str, bool]:
@@ -733,16 +933,17 @@ def dry_run_local_ai(session: Session, owned_card_id: int, pass_type: str = "fas
     if not assets:
         raise HTTPException(status_code=400, detail="No OpenCV assets found for local AI analysis.")
     prompt = build_prompt(card, opencv_measurements(session, opencv_run), pass_type)
+    config = local_ai_config()
     return {
-        "config": local_ai_config(),
+        "config": config,
         "opencv_analysis_run_id": opencv_run.id,
         "images_would_send": len(assets),
         "image_labels_would_send": selected_asset_labels(assets),
         "selected_asset_file_paths": [asset.file_path for asset in assets],
         "max_images": LOCAL_AI_MAX_IMAGES,
         "max_tokens": LOCAL_AI_MAX_TOKENS,
-        "model_name": LOCAL_AI_MODEL_NAME,
-        "base_url": LOCAL_AI_BASE_URL,
+        "model_name": config.get("model_name") or "",
+        "base_url": config.get("base_url") or "",
         "prompt_preview": prompt,
     }
 

@@ -112,25 +112,33 @@ export function SettingsPage() {
       )}
 
       {localAI && (
-        <Panel title="Local AI státusz" subtitle="Csak localhost model szerver engedélyezett. Nincs API kulcs és nincs külső AI hívás.">
+        <Panel title="Local AI státusz" subtitle="Server-local LM Studio vagy Tailscale remote worker mód. Nincs API kulcs és nincs külső AI hívás.">
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            <StatCard label="Mód" value={localAI.mode} tone={localAI.enabled ? "good" : "warn"} />
             <StatCard label="Enabled" value={localAI.enabled ? "igen" : "nem"} tone={localAI.enabled ? "good" : "warn"} />
             <StatCard label="Provider" value={localAI.provider} />
             <StatCard label="Base URL" value={localAI.base_url} />
+            <StatCard label="Worker URL" value={localAI.worker_base_url || "-"} />
             <StatCard label="Model" value={localAI.model_name || "-"} />
             <StatCard label="Timeout" value={`${localAIConfig?.timeout_seconds ?? "-"}s`} />
             <StatCard label="Max images" value={localAIConfig?.max_images ?? "-"} />
             <StatCard label="Max tokens" value={localAIConfig?.max_tokens ?? "-"} />
             <StatCard label="Disable thinking" value={localAIConfig?.disable_thinking ? "igen" : "nem"} tone={localAIConfig?.disable_thinking ? "good" : "warn"} />
-            <StatCard label="Localhost" value={localAI.is_localhost ? "igen" : "nem"} tone={localAI.is_localhost ? "good" : "bad"} />
+            <StatCard label="Localhost" value={localAI.is_localhost ? "igen" : "nem"} tone={localAI.mode === "server_local" ? (localAI.is_localhost ? "good" : "bad") : undefined} />
             <StatCard label="Reachable" value={localAI.reachable ? "igen" : "nem"} tone={localAI.reachable ? "good" : "warn"} />
+            <StatCard label="Worker" value={localAI.worker_reachable ? "elérhető" : "nem elérhető"} tone={localAI.worker_reachable ? "good" : "warn"} />
             <StatCard label="Vision" value={localAI.vision_capable} />
+            <StatCard label="Szerver szerep" value={localAI.server_role || localAIConfig?.server_role || "-"} />
+            <StatCard label="Kliens szerep" value={localAI.client_role || localAIConfig?.client_role || "-"} />
           </div>
           <p className="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-sm text-slate-300">{localAI.message}</p>
           <p className="mt-3 text-sm text-slate-400">Az értékeket jelenleg .env fájlban kell beállítani, majd a backendet újraindítani.</p>
           <p className="mt-2 text-sm text-slate-400">
-            A modellváltáshoz módosítsd a backend/.env LOCAL_AI_MODEL_NAME értékét a /v1/models listában látott pontos model id-re,
-            majd indítsd újra a backendet.
+            Dev módban használd a LOCAL_AI_MODE=server_local és LOCAL_AI_BASE_URL=http://127.0.0.1:1234/v1 beállítást. Szerverre költöztetésnél
+            LOCAL_AI_MODE=remote_worker és LOCAL_AI_WORKER_BASE_URL mutat majd a gamer PC Tailscale címére.
+          </p>
+          <p className="mt-2 text-sm text-slate-400">
+            A modellváltáshoz módosítsd a backend/.env LOCAL_AI_MODEL_NAME értékét a model listában látott pontos model id-re, majd indítsd újra a backendet.
           </p>
           <p className="mt-2 text-sm text-slate-400">
             Qwen modelleknél LM Studio-ban kapcsold ki az Enable Thinking opciót, vagy használd a LOCAL_AI_DISABLE_THINKING=true beállítást.
@@ -152,7 +160,9 @@ export function SettingsPage() {
           {connectionTest && (
             <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-sm text-slate-300">
               <div className="font-medium text-slate-100">Kapcsolat teszt: {connectionTest.ok ? "OK" : "nem OK"}</div>
+              <div className="mt-1">Mód: {connectionTest.mode || localAI.mode}</div>
               <div className="mt-1">Reachable: {connectionTest.reachable ? "igen" : "nem"}</div>
+              <div className="mt-1">Worker reachable: {connectionTest.worker_reachable ? "igen" : "nem"}</div>
               <div className="mt-1">Selected model: {connectionTest.selected_model || "-"}</div>
               <div className={connectionTest.selected_model_found ? "mt-1 text-emerald-200" : "mt-1 text-amber-200"}>
                 Selected model loaded: {connectionTest.selected_model_found ? "igen" : "nem"}

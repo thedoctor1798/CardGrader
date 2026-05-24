@@ -246,7 +246,15 @@ Saving creates a new derived media record, for example `front_adjusted`, `front_
 
 ## Local AI Setup
 
-Local AI is optional and disabled by default. Only localhost model servers are allowed. No API key is used.
+Local AI is optional and disabled by default. No API key is used, no cloud AI is called, and the model must stay self-hosted.
+
+CardGrader now separates the app host from the Local AI host:
+
+- `LOCAL_AI_MODE=disabled` disables Local AI.
+- `LOCAL_AI_MODE=server_local` keeps the current dev workflow where the backend talks directly to LM Studio on the same machine.
+- `LOCAL_AI_MODE=remote_worker` prepares the server-hosted architecture where the backend contacts a gamer PC Local AI worker over Tailscale.
+
+The legacy `LOCAL_AI_ENABLED=true` still maps to `server_local` when `LOCAL_AI_MODE` is not set.
 
 Detailed LM Studio workflow:
 
@@ -262,7 +270,7 @@ http://127.0.0.1:1234/v1
 5. Create/edit backend `.env` or set these environment variables before starting the backend:
 
 ```powershell
-$env:LOCAL_AI_ENABLED="true"
+$env:LOCAL_AI_MODE="server_local"
 $env:LOCAL_AI_PROVIDER="lmstudio"
 $env:LOCAL_AI_BASE_URL="http://127.0.0.1:1234/v1"
 $env:LOCAL_AI_MODEL_NAME="<your-local-vision-model>"
@@ -279,7 +287,7 @@ $env:LOCAL_AI_DISABLE_THINKING="true"
 9. Run OpenCV analysis first.
 10. Run Local AI analysis from the Card Detail page.
 
-Allowed local base URLs:
+Allowed `server_local` base URLs:
 
 - `http://127.0.0.1:1234/v1`
 - `http://localhost:1234/v1`
@@ -289,6 +297,35 @@ Allowed local base URLs:
 - `http://localhost:8080/v1`
 
 Run OpenCV analysis first, then run Local AI analysis from the Card Detail page.
+
+### Server-hosted app with gamer PC AI worker
+
+Planned hosted layout:
+
+- Server hosts the backend API, frontend, database, media storage, card catalog, price history, and metrics exporter.
+- Gamer PC hosts LM Studio or another local vision LLM.
+- A small Local AI worker/bridge runs on the gamer PC and exposes a private HTTP endpoint over Tailscale.
+- The server calls only that Tailscale worker URL. It does not need a GPU and does not call external AI APIs.
+
+Server `.env` example:
+
+```text
+LOCAL_AI_MODE=remote_worker
+LOCAL_AI_WORKER_BASE_URL=http://100.x.y.z:8720
+LOCAL_AI_MODEL_NAME=<your-local-vision-model>
+LOCAL_AI_TIMEOUT_SECONDS=180
+LOCAL_AI_MAX_IMAGES=1
+LOCAL_AI_MAX_TOKENS=4096
+LOCAL_AI_DISABLE_THINKING=true
+```
+
+Gamer PC responsibilities:
+
+- Run LM Studio locally, usually on `http://127.0.0.1:1234/v1`.
+- Run the future CardGrader Local AI worker/bridge.
+- Advertise only the worker endpoint through Tailscale/private networking.
+
+Phase 15.2 adds the mode/config/status contract and a backend provider placeholder for `remote_worker`. The actual worker process and analysis handoff can be implemented next. Until that bridge exists, normal Local AI analysis should use `server_local`.
 
 By default Local AI sends only:
 
@@ -320,7 +357,8 @@ Local AI troubleshooting:
 - If LM Studio is unreachable, check that the LM Studio local server is running.
 - If the model is missing, copy the exact model id/name from LM Studio or `/models`.
 - If JSON parsing fails, inspect `local_ai_raw_response.txt` under `media/reports`.
-- Only localhost model servers are allowed. Remote API hosts, LAN IPs, public IPs, and domain names are rejected.
+- In `server_local` mode, `LOCAL_AI_BASE_URL` must be localhost.
+- In `remote_worker` mode, `LOCAL_AI_WORKER_BASE_URL` should be a private self-hosted worker URL, typically a Tailscale `100.x.y.z` address. Do not point it at cloud AI or public API services.
 
 Recommended LM Studio Qwen settings:
 
