@@ -2,6 +2,7 @@ from fastapi import HTTPException
 from sqlmodel import Session, select
 
 from ..models import AnalysisAsset, AnalysisFinding, AnalysisRun
+from .centering import latest_manual_centering
 from .pricing import get_latest_price_for_card
 from .scoring import get_owned_card_and_card, is_confirmed_grade_limiter, load_opportunity, main_grade_limiter
 
@@ -13,6 +14,7 @@ def build_analysis_report(session: Session, analysis_run_id: int) -> dict:
 
     owned_card, card = get_owned_card_and_card(session, analysis_run)
     latest_price = get_latest_price_for_card(session, card.id)
+    latest_centering = latest_manual_centering(session, owned_card.id)
     opportunity = load_opportunity(session, card.id)
     assets = session.exec(
         select(AnalysisAsset)
@@ -34,7 +36,12 @@ def build_analysis_report(session: Session, analysis_run_id: int) -> dict:
     strengths = []
     if not confirmed_findings:
         strengths.append("A lokális AI nem jelölt egyértelmű, megerősített sérülést.")
-    if analysis_run.centering_score is not None and analysis_run.centering_score >= 8.5:
+    if latest_centering is not None:
+        strengths.append(
+            f"Manualis centering meres: L/R {latest_centering.horizontal_ratio_label}, "
+            f"T/B {latest_centering.vertical_ratio_label}."
+        )
+    elif analysis_run.centering_score is not None and analysis_run.centering_score >= 8.5:
         strengths.append("A centering MVP pontszám erős előszűrési értéket mutat.")
     main_grade_limiters = [
         f"{finding.title or finding.finding_type or 'Finding'} ({finding.severity or 'unknown'}, {finding.location_label or 'ismeretlen hely'})"
@@ -79,6 +86,7 @@ def build_analysis_report(session: Session, analysis_run_id: int) -> dict:
         "recommendation": analysis_run.recommendation,
         "recommendation_reason": analysis_run.recommendation_reason,
         "latest_price": latest_price,
+        "latest_centering": latest_centering,
         "opportunity_precheck": opportunity,
         "assets": assets,
         "findings": findings,

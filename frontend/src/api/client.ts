@@ -1,11 +1,13 @@
 import type {
   AnalysisReport,
+  AnalysisRunDetail,
   AnalysisRun,
   AnalysisFinding,
   AnnotationResponse,
   AppInfo,
   Card,
   CardMedia,
+  CenteringMeasurement,
   CleanupGeneratedMediaResponse,
   CollectionSnapshot,
   CollectionSummary,
@@ -90,6 +92,7 @@ export const api = {
       body: JSON.stringify(body),
     }),
   getAnalysisRuns: (ownedCardId: number) => request<AnalysisRun[]>(`/api/owned-cards/${ownedCardId}/analysis-runs`),
+  getAnalysisRunDetail: (analysisRunId: number) => request<AnalysisRunDetail>(`/api/analysis-runs/${analysisRunId}`),
   runOpenCvAnalysis: (ownedCardId: number) =>
     request<AnalysisRun>(`/api/owned-cards/${ownedCardId}/analyze/opencv`, { method: "POST" }),
   runLocalAIFastAnalysis: (ownedCardId: number) =>
@@ -114,4 +117,12 @@ export const api = {
     request<AnnotationResponse>(`/api/analysis-runs/${analysisRunId}/annotate`, { method: "POST" }),
   getAnalysisReport: (analysisRunId: number) => request<AnalysisReport>(`/api/analysis-runs/${analysisRunId}/report`),
   getAnalysisFindings: (analysisRunId: number) => request<AnalysisFinding[]>(`/api/analysis-runs/${analysisRunId}/findings`),
+  getCenteringMeasurements: (ownedCardId: number) =>
+    request<CenteringMeasurement[]>(`/api/owned-cards/${ownedCardId}/centering-measurements`),
+  getLatestCentering: (ownedCardId: number) => request<CenteringMeasurement>(`/api/owned-cards/${ownedCardId}/latest-centering`),
+  createCenteringMeasurement: (ownedCardId: number, body: Partial<CenteringMeasurement>) =>
+    request<CenteringMeasurement>(`/api/owned-cards/${ownedCardId}/centering-measurements`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
 };

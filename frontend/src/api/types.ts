@@ -123,6 +123,49 @@ export type AnalysisAsset = {
   created_at: string;
 };
 
+export type AnalysisRunDetail = {
+  analysis_run: AnalysisRun;
+  findings: AnalysisFinding[];
+  assets: AnalysisAsset[];
+};
+
+export type CenteringMeasurement = {
+  id: number;
+  owned_card_id: number;
+  analysis_run_id?: number | null;
+  media_id?: number | null;
+  side: "front" | "back";
+  source: string;
+  image_label?: string | null;
+  image_width: number;
+  image_height: number;
+  outer_left_px: number;
+  outer_right_px: number;
+  outer_top_px: number;
+  outer_bottom_px: number;
+  inner_left_px: number;
+  inner_right_px: number;
+  inner_top_px: number;
+  inner_bottom_px: number;
+  left_border_px?: number | null;
+  right_border_px?: number | null;
+  top_border_px?: number | null;
+  bottom_border_px?: number | null;
+  horizontal_ratio_label?: string | null;
+  vertical_ratio_label?: string | null;
+  horizontal_left_percent?: number | null;
+  horizontal_right_percent?: number | null;
+  vertical_top_percent?: number | null;
+  vertical_bottom_percent?: number | null;
+  horizontal_offcenter_percent?: number | null;
+  vertical_offcenter_percent?: number | null;
+  centering_score?: number | null;
+  estimated_grade_label?: string | null;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
 export type AnalysisFinding = {
   id: number;
   analysis_run_id: number;
@@ -186,6 +229,7 @@ export type AnalysisReport = {
   recommendation?: string | null;
   recommendation_reason?: string | null;
   latest_price?: PriceObservation | null;
+  latest_centering?: CenteringMeasurement | null;
   opportunity_precheck?: OpportunityPrecheck | null;
   assets: AnalysisAsset[];
   findings: AnalysisFinding[];

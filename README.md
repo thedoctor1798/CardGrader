@@ -136,6 +136,7 @@ After creating a card you can:
 - Upload front/back images from the card detail page.
 - Add manual prices in the price panel.
 - Run OpenCV analysis.
+- Set manual centering with `Centering beallitasa` if you want centering ratios to override the automatic MVP estimate.
 - If configured, run Local AI analysis.
 
 The Rowlet demo seed remains available for testing, but it is no longer the main workflow.
@@ -172,7 +173,28 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8710/api/analysis-runs/1/sc
 Invoke-RestMethod -Method Get -Uri http://127.0.0.1:8710/api/analysis-runs/1/report
 ```
 
-OpenCV preprocessing now detects the card outline, creates a perspective-corrected normalized card image, and generates corner/edge crops from that normalized card image instead of the surrounding photo background. Debug assets include detected contour overlays and normalized previews so crop quality can be checked visually. If reliable card extraction fails, the resized image is kept and misleading corner/edge crops are skipped.
+OpenCV preprocessing currently keeps the reliable parts only: resized front/back images and image quality metrics. Automatic corner/edge crops and automatic normalized card extraction are disabled from the normal grading and Local AI flow because they were unreliable without manual verification. Local AI uses full front/back resized images by default.
+
+## Manual Centering
+
+The card detail page includes `Centering beallitasa`.
+
+- Red guide lines mark the outer card edges.
+- Blue guide lines mark the inner artwork/border boundaries.
+- Drag the guide lines visually until they match the card.
+- The editor calculates L/R and T/B ratios live, for example `54/46` and `58/42`.
+- Saved manual centering measurements are stored locally and override the automatic OpenCV centering estimate in scoring/reporting.
+
+Normalized or tightly cropped card images are best for accuracy, but the editor falls back to the resized front/back image when normalized images are unavailable.
+
+Centering reference:
+
+- Gem Mint 10: 55/45 or better
+- Mint 9: 60/40 or better
+- NM-MT 8.5: 65/35 or better
+- NM-MT 8: 70/30 or better
+- EX-MT 7.5: 75/25 or better
+- Below 7: worse than 75/25
 
 ## Local AI Setup
 

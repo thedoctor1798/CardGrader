@@ -30,45 +30,17 @@ LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 LOCAL_AI_ANALYSIS_VERSION = "local_ai_fast_v1"
 LOCAL_AI_PROMPT_VERSION = "local_vision_v1"
 ASSET_PRIORITY = [
-    "front_normalized",
-    "back_normalized",
     "front_resized",
     "back_resized",
-    "front_corner_tl",
-    "front_corner_tr",
-    "front_corner_bl",
-    "front_corner_br",
-    "back_corner_tl",
-    "back_corner_tr",
-    "back_corner_bl",
-    "back_corner_br",
 ]
 PASS_ASSET_PRIORITY = {
     "front": [
-        "front_normalized",
-        "front_corner_tl",
-        "front_corner_tr",
-        "front_corner_bl",
-        "front_corner_br",
-        "front_edge_top",
-        "front_edge_right",
-        "front_edge_bottom",
-        "front_edge_left",
         "front_resized",
     ],
     "back": [
-        "back_normalized",
-        "back_corner_tl",
-        "back_corner_tr",
-        "back_corner_bl",
-        "back_corner_br",
-        "back_edge_top",
-        "back_edge_right",
-        "back_edge_bottom",
-        "back_edge_left",
         "back_resized",
     ],
-    "fast": ["front_normalized", "back_normalized", "front_resized", "back_resized"],
+    "fast": ["front_resized", "back_resized"],
 }
 ALLOWED_FINDING_TYPES = {
     "corner_whitening",
@@ -272,7 +244,7 @@ def collect_assets_for_pass(session: Session, opencv_run_id: int, pass_type: str
     statement = (
         select(AnalysisAsset)
         .where(AnalysisAsset.analysis_run_id == opencv_run_id)
-        .where(AnalysisAsset.asset_type.in_(["resized_image", "normalized_image", "crop"]))
+        .where(AnalysisAsset.asset_type == "resized_image")
         .order_by(AnalysisAsset.created_at, AnalysisAsset.id)
     )
     assets = session.exec(statement).all()
@@ -357,10 +329,10 @@ Pass instructions:
 {pass_focus_text(pass_type)}
 
 Your task:
-Analyze the provided images and crops:
-- front/back resized images
-- corner crops
-- edge crops
+Analyze the provided full-card resized image or images:
+- front resized image when provided
+- back resized image when provided
+- do not assume missing side condition
 
 Look for:
 - corner whitening
@@ -776,7 +748,7 @@ def dry_run_local_ai(session: Session, owned_card_id: int, pass_type: str = "fas
 
 
 def choose_single_debug_asset(assets: list[AnalysisAsset]) -> AnalysisAsset:
-    return next((asset for asset in assets if asset.label == "front_normalized"), next((asset for asset in assets if asset.label == "front_resized"), assets[0]))
+    return next((asset for asset in assets if asset.label == "front_resized"), assets[0])
 
 
 def local_ai_debug_single_image(session: Session, owned_card_id: int) -> dict[str, Any]:

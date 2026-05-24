@@ -1,6 +1,6 @@
 import { Play, RefreshCw, Upload, X } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import type { ReactNode } from "react";
+import type { PointerEvent, ReactNode } from "react";
 import { api, mediaUrl } from "../api/client";
 import type {
   AnalysisAsset,
@@ -9,6 +9,7 @@ import type {
   AnalysisRun,
   Card,
   CardMedia,
+  CenteringMeasurement,
   LocalAIDryRun,
   LocalAIDebugSingleImageResponse,
   LocalAIStatus,
@@ -127,7 +128,10 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const [card, setCard] = useState<Card | null>(null);
   const [media, setMedia] = useState<CardMedia[]>([]);
   const [latestPrice, setLatestPrice] = useState<PriceObservation | null>(null);
+  const [latestCentering, setLatestCentering] = useState<CenteringMeasurement | null>(null);
+  const [centeringMeasurements, setCenteringMeasurements] = useState<CenteringMeasurement[]>([]);
   const [analysisRuns, setAnalysisRuns] = useState<AnalysisRun[]>([]);
+  const [opencvAssets, setOpenCvAssets] = useState<AnalysisAsset[]>([]);
   const [findings, setFindings] = useState<AnalysisFinding[]>([]);
   const [localAI, setLocalAI] = useState<LocalAIStatus | null>(null);
   const [localAIDryRun, setLocalAIDryRun] = useState<LocalAIDryRun | null>(null);
@@ -142,6 +146,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const [priceForm, setPriceForm] = useState<PriceForm>(emptyPriceForm);
   const [ownedEditForm, setOwnedEditForm] = useState<OwnedEditForm>(editFormFromOwnedCard(null));
   const [previewAsset, setPreviewAsset] = useState<AnalysisAsset | CardMedia | null>(null);
+  const [showCenteringEditor, setShowCenteringEditor] = useState(false);
 
   const busy = busyLabel !== null;
   const latestAnalysis = analysisRuns[0] ?? null;
@@ -202,6 +207,24 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
       }
 
       await loadReport(runsData[0]?.id ?? null);
+      const latestOpenCvRun = runsData.find((run) => run.mode === "local_only" && run.status === "completed");
+      if (latestOpenCvRun) {
+        try {
+          const detail = await api.getAnalysisRunDetail(latestOpenCvRun.id);
+          setOpenCvAssets(detail.assets);
+        } catch {
+          setOpenCvAssets([]);
+        }
+      } else {
+        setOpenCvAssets([]);
+      }
+      try {
+        setLatestCentering(await api.getLatestCentering(ownedCardId));
+        setCenteringMeasurements(await api.getCenteringMeasurements(ownedCardId));
+      } catch {
+        setLatestCentering(null);
+        setCenteringMeasurements([]);
+      }
       try {
         setLocalAI(await api.getLocalAIStatus());
       } catch {
@@ -235,7 +258,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
       corners: assets.filter((asset) => asset.label?.includes("corner")),
       edges: assets.filter((asset) => asset.label?.includes("edge")),
       annotated: assets.filter((asset) => asset.asset_type === "annotated_image"),
-      debug: assets.filter((asset) => asset.asset_type?.startsWith("local_ai") || asset.asset_type === "opencv_debug"),
+      debug: assets.filter((asset) => asset.asset_type?.startsWith("local_ai") || asset.asset_type === "opencv_debug" || asset.asset_type === "crop" || asset.asset_type === "normalized_image"),
     };
   }, [report]);
 
@@ -495,6 +518,39 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
     }
   };
 
+  const centeringSources = useMemo(() => {
+    const assetSource = (side: "front" | "back") =>
+      opencvAssets.find((asset) => asset.label === `${side}_normalized`)
+      ?? opencvAssets.find((asset) => asset.label === `${side}_resized`);
+    const mediaSource = (side: "front" | "back") =>
+      media.find((item) => item.label === side && item.media_type === "image");
+    return {
+      front: assetSource("front") ?? mediaSource("front") ?? null,
+      back: assetSource("back") ?? mediaSource("back") ?? null,
+    };
+  }, [media, opencvAssets]);
+
+  const saveCenteringMeasurement = async (payload: Partial<CenteringMeasurement>) => {
+    setBusyLabel("Centering mentése...");
+    setMessage(null);
+    try {
+      const saved = await api.createCenteringMeasurement(ownedCardId, payload);
+      setLatestCentering(saved);
+      setCenteringMeasurements(await api.getCenteringMeasurements(ownedCardId));
+      setShowCenteringEditor(false);
+      if (latestAnalysis) {
+        await api.scoreAnalysisRun(latestAnalysis.id);
+        await loadReport(latestAnalysis.id);
+      }
+      setMessage("Centering mérés mentve.");
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Centering mentési hiba");
+    } finally {
+      setBusyLabel(null);
+    }
+  };
+
   if (loading) return <LoadingState label="Kártya részletek betöltése..." />;
   if (error && !ownedCard) return <EmptyState label={`Nem sikerült betölteni a kártyát: ${error}`} />;
   if (!ownedCard) return <EmptyState label="Owned card nem található." />;
@@ -610,12 +666,15 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
 
         <div className="space-y-4">
           <Panel title="Képi elemzés" subtitle="OpenCV előfeldolgozás és localhost-only Local AI opcionális elemzés.">
-            <div className="grid gap-3 md:grid-cols-2">
+            <div className="grid gap-3 md:grid-cols-3">
               <button className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-60" disabled={busy} onClick={runAnalysis} type="button">
                 <Play size={16} /> {busyLabel === "Elemzés fut..." ? "Elemzés fut..." : "OpenCV elemzés indítása"}
               </button>
               <button className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50" disabled={busy || Boolean(localAIBlockedReason)} onClick={runLocalAI} type="button">
                 <Play size={16} /> Local AI elemzés
+              </button>
+              <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-cyan-500/40 px-3 py-2 text-sm font-medium text-cyan-100 hover:bg-cyan-500/10 disabled:opacity-50" disabled={busy || (!centeringSources.front && !centeringSources.back)} onClick={() => setShowCenteringEditor(true)} type="button">
+                Centering beállítása
               </button>
             </div>
             {localAIBlockedReason && <p className="mt-3 text-sm text-amber-200">{localAIBlockedReason}</p>}
@@ -721,10 +780,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
             ) : (
               <div className="space-y-5">
                 {([
-                  ["Normalized", groupedAssets.normalized],
-                  ["Crops", groupedAssets.crops],
                   ["Annotated", groupedAssets.annotated],
-                  ["Debug", groupedAssets.debug],
                   ["Resized", groupedAssets.resized],
                 ] as const).map(([title, assets]) => (
                   <div key={title}>
@@ -747,6 +803,26 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                     )}
                   </div>
                 ))}
+                <details className="rounded-lg border border-slate-800 bg-slate-950/25 p-3">
+                  <summary className="cursor-pointer text-sm font-medium text-slate-300">Fejlesztői / Debug eszközök</summary>
+                  <div className="mt-4 space-y-4">
+                    <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-sm text-amber-100">
+                      Auto crop / unreliable: a régi OpenCV crop assetek csak debug célra látszanak, gradinghez és Local AI-hoz nem használjuk őket.
+                    </div>
+                    <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
+                      {groupedAssets.debug.map((asset) => (
+                        <button key={asset.id} className="rounded-lg border border-slate-800 bg-charcoal-900 p-2 text-left transition hover:border-blue-500/50 hover:bg-slate-800/40" onClick={() => setPreviewAsset(asset)} type="button">
+                          {asset.asset_type?.startsWith("local_ai") ? (
+                            <div className="flex aspect-square w-full items-center justify-center rounded bg-slate-950 p-2 text-center text-xs text-slate-400">debug file</div>
+                          ) : (
+                            <img className="aspect-square w-full rounded object-cover opacity-70" src={mediaUrl(asset.file_path)} alt={asset.label ?? "asset"} />
+                          )}
+                          <div className="mt-2 truncate text-xs text-slate-400">{asset.label}</div>
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </details>
               </div>
             )}
           </Panel>
@@ -768,6 +844,21 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                   <StatCard label="Edges" value={formatNumber(report.scores.edges_score)} />
                   <StatCard label="Surface" value={formatNumber(report.scores.surface_score)} />
                 </div>
+                {(report.latest_centering || latestCentering) && (
+                  <div className="rounded-lg border border-cyan-500/25 bg-cyan-500/10 p-4 text-sm text-cyan-100">
+                    <div className="font-semibold">Centering: L/R {(report.latest_centering ?? latestCentering)?.horizontal_ratio_label}, T/B {(report.latest_centering ?? latestCentering)?.vertical_ratio_label} (manual)</div>
+                    <div className="mt-1">Score: {formatNumber((report.latest_centering ?? latestCentering)?.centering_score)} · {(report.latest_centering ?? latestCentering)?.estimated_grade_label}</div>
+                    {centeringMeasurements.length > 1 && (
+                      <div className="mt-3 space-y-1 text-xs text-cyan-200/80">
+                        {centeringMeasurements.slice(0, 3).map((measurement) => (
+                          <div key={measurement.id}>
+                            {measurement.side}: L/R {measurement.horizontal_ratio_label}, T/B {measurement.vertical_ratio_label} · {formatDate(measurement.created_at)}
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-2">
                   <StatCard label="PSA 10 %" value={formatNumber(report.probabilities.psa_10_probability, 0)} />
                   <StatCard label="PSA 9 %" value={formatNumber(report.probabilities.psa_9_probability, 0)} />
@@ -841,6 +932,16 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
         </div>
       </div>
 
+      {showCenteringEditor && (
+        <CenteringEditor
+          sources={centeringSources}
+          latest={latestCentering}
+          busy={busy}
+          onCancel={() => setShowCenteringEditor(false)}
+          onSave={saveCenteringMeasurement}
+        />
+      )}
+
       {previewAsset && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" onClick={() => setPreviewAsset(null)}>
           <div className="max-h-[92vh] w-full max-w-5xl overflow-hidden rounded-xl border border-slate-700 bg-charcoal-900" onClick={(event) => event.stopPropagation()}>
@@ -892,6 +993,218 @@ function FindingSection({ title, findings }: { title: string; findings: Analysis
             {finding.uncertainty_reason && <div className="mt-2 text-xs text-amber-200">{finding.uncertainty_reason}</div>}
           </div>
         ))}
+      </div>
+    </div>
+  );
+}
+
+type CenteringSource = AnalysisAsset | CardMedia;
+type CenteringLines = {
+  outer_left_px: number;
+  outer_right_px: number;
+  outer_top_px: number;
+  outer_bottom_px: number;
+  inner_left_px: number;
+  inner_right_px: number;
+  inner_top_px: number;
+  inner_bottom_px: number;
+};
+type LineKey = keyof CenteringLines;
+
+function defaultLines(width: number, height: number): CenteringLines {
+  return {
+    outer_left_px: width * 0.05,
+    outer_right_px: width * 0.95,
+    outer_top_px: height * 0.04,
+    outer_bottom_px: height * 0.96,
+    inner_left_px: width * 0.18,
+    inner_right_px: width * 0.82,
+    inner_top_px: height * 0.16,
+    inner_bottom_px: height * 0.84,
+  };
+}
+
+function linesFromMeasurement(measurement: CenteringMeasurement | null, width: number, height: number): CenteringLines {
+  if (!measurement || measurement.image_width !== width || measurement.image_height !== height) return defaultLines(width, height);
+  return {
+    outer_left_px: measurement.outer_left_px,
+    outer_right_px: measurement.outer_right_px,
+    outer_top_px: measurement.outer_top_px,
+    outer_bottom_px: measurement.outer_bottom_px,
+    inner_left_px: measurement.inner_left_px,
+    inner_right_px: measurement.inner_right_px,
+    inner_top_px: measurement.inner_top_px,
+    inner_bottom_px: measurement.inner_bottom_px,
+  };
+}
+
+function liveCentering(lines: CenteringLines) {
+  const left = Math.max(0, lines.inner_left_px - lines.outer_left_px);
+  const right = Math.max(0, lines.outer_right_px - lines.inner_right_px);
+  const top = Math.max(0, lines.inner_top_px - lines.outer_top_px);
+  const bottom = Math.max(0, lines.outer_bottom_px - lines.inner_bottom_px);
+  const ratio = (a: number, b: number) => {
+    const total = a + b || 1;
+    const first = (a * 100) / total;
+    const second = (b * 100) / total;
+    return { first, second, label: `${Math.round(first)}/${Math.round(second)}`, off: Math.abs(first - 50) };
+  };
+  const horizontal = ratio(left, right);
+  const vertical = ratio(top, bottom);
+  const limiter = Math.max(horizontal.first, horizontal.second, vertical.first, vertical.second);
+  const grade = limiter <= 55 ? "Gem Mint 10" : limiter <= 60 ? "Mint 9" : limiter <= 65 ? "NM-MT 8.5" : limiter <= 70 ? "NM-MT 8" : limiter <= 75 ? "EX-MT 7.5" : "Below 7";
+  const score = limiter <= 55 ? 10 : limiter <= 60 ? 9 : limiter <= 65 ? 8.5 : limiter <= 70 ? 8 : limiter <= 75 ? 7.5 : Math.max(1, 7 - ((limiter - 75) / 5));
+  const shiftX = horizontal.first > horizontal.second ? "shifted right" : horizontal.second > horizontal.first ? "shifted left" : "balanced";
+  const shiftY = vertical.first > vertical.second ? "shifted down" : vertical.second > vertical.first ? "shifted up" : "balanced";
+  return { horizontal, vertical, grade, score: Math.round(score * 10) / 10, shiftX, shiftY };
+}
+
+function CenteringEditor({
+  sources,
+  latest,
+  busy,
+  onCancel,
+  onSave,
+}: {
+  sources: { front: CenteringSource | null; back: CenteringSource | null };
+  latest: CenteringMeasurement | null;
+  busy: boolean;
+  onCancel: () => void;
+  onSave: (payload: Partial<CenteringMeasurement>) => void;
+}) {
+  const [side, setSide] = useState<"front" | "back">(sources.front ? "front" : "back");
+  const [natural, setNatural] = useState({ width: 0, height: 0 });
+  const [lines, setLines] = useState<CenteringLines | null>(null);
+  const [dragging, setDragging] = useState<LineKey | null>(null);
+  const source = sources[side] ?? sources.front ?? sources.back;
+  const result = lines ? liveCentering(lines) : null;
+
+  useEffect(() => {
+    setLines(null);
+    setNatural({ width: 0, height: 0 });
+  }, [side, source?.file_path]);
+
+  const initializeLines = (width: number, height: number) => {
+    setNatural({ width, height });
+    setLines(linesFromMeasurement(latest?.side === side ? latest : null, width, height));
+  };
+
+  const updateLine = (event: PointerEvent<SVGSVGElement>) => {
+    if (!dragging || !lines || natural.width <= 0 || natural.height <= 0) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = ((event.clientX - rect.left) / rect.width) * natural.width;
+    const y = ((event.clientY - rect.top) / rect.height) * natural.height;
+    setLines((current) => {
+      if (!current) return current;
+      const next = { ...current };
+      if (dragging.includes("left") || dragging.includes("right")) {
+        next[dragging] = Math.max(0, Math.min(natural.width, x));
+      } else {
+        next[dragging] = Math.max(0, Math.min(natural.height, y));
+      }
+      return next;
+    });
+  };
+
+  const save = () => {
+    if (!source || !lines || !natural.width || !natural.height) return;
+    onSave({
+      side,
+      source: "manual",
+      image_label: source.label,
+      image_width: natural.width,
+      image_height: natural.height,
+      media_id: "owned_card_id" in source ? source.id : null,
+      ...lines,
+    });
+  };
+
+  const lineClass = (key: LineKey) => key.startsWith("outer") ? "stroke-rose-500" : "stroke-sky-400";
+  const lineWidth = 3;
+  const scaleX = (value: number) => `${(value / Math.max(1, natural.width)) * 100}%`;
+  const scaleY = (value: number) => `${(value / Math.max(1, natural.height)) * 100}%`;
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
+      <div className="max-h-[94vh] w-full max-w-6xl overflow-auto rounded-xl border border-slate-700 bg-charcoal-900 p-4">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-100">Centering beállítása</h2>
+            <p className="mt-1 text-sm text-slate-400">Piros: külső kártyaszél. Kék: belső artwork/border határ.</p>
+          </div>
+          <div className="flex gap-2">
+            <button className={`rounded-lg px-3 py-2 text-sm ${side === "front" ? "bg-blue-600 text-white" : "border border-slate-700 text-slate-300"}`} disabled={!sources.front} onClick={() => setSide("front")} type="button">Front</button>
+            <button className={`rounded-lg px-3 py-2 text-sm ${side === "back" ? "bg-blue-600 text-white" : "border border-slate-700 text-slate-300"}`} disabled={!sources.back} onClick={() => setSide("back")} type="button">Back</button>
+          </div>
+        </div>
+
+        {!source ? (
+          <EmptyState label="Nincs használható front/back kép a centering szerkesztőhöz." />
+        ) : (
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+            <div className="flex justify-center overflow-hidden rounded-lg border border-slate-800 bg-slate-950">
+              <div className="relative inline-block max-h-[72vh] max-w-full">
+                <img
+                  className="block max-h-[72vh] w-auto max-w-full select-none"
+                  src={mediaUrl(source.file_path)}
+                  alt={source.label ?? side}
+                  onLoad={(event) => initializeLines(event.currentTarget.naturalWidth, event.currentTarget.naturalHeight)}
+                  draggable={false}
+                />
+                {lines && natural.width > 0 && (
+                  <svg
+                    className="absolute inset-0 h-full w-full touch-none"
+                    onPointerMove={updateLine}
+                    onPointerUp={() => setDragging(null)}
+                    onPointerLeave={() => setDragging(null)}
+                    viewBox={`0 0 ${natural.width} ${natural.height}`}
+                    preserveAspectRatio="none"
+                  >
+                    {(["outer_left_px", "outer_right_px", "inner_left_px", "inner_right_px"] as LineKey[]).map((key) => (
+                      <line key={key} x1={lines[key]} x2={lines[key]} y1={0} y2={natural.height} className={`${lineClass(key)} cursor-ew-resize`} strokeWidth={lineWidth} onPointerDown={() => setDragging(key)} />
+                    ))}
+                    {(["outer_top_px", "outer_bottom_px", "inner_top_px", "inner_bottom_px"] as LineKey[]).map((key) => (
+                      <line key={key} x1={0} x2={natural.width} y1={lines[key]} y2={lines[key]} className={`${lineClass(key)} cursor-ns-resize`} strokeWidth={lineWidth} onPointerDown={() => setDragging(key)} />
+                    ))}
+                  </svg>
+                )}
+              </div>
+            </div>
+
+            <div className="space-y-3">
+              {result && (
+                <div className="rounded-lg border border-cyan-500/25 bg-cyan-500/10 p-4 text-sm text-cyan-100">
+                  <div className="text-base font-semibold">{result.grade}</div>
+                  <div className="mt-2">L/R: {result.horizontal.label}</div>
+                  <div>T/B: {result.vertical.label}</div>
+                  <div>Score: {formatNumber(result.score)}</div>
+                  <div className="mt-2 text-cyan-200">{result.shiftX} · {result.shiftY}</div>
+                </div>
+              )}
+              <div className="grid grid-cols-2 gap-2">
+                <button className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800" onClick={() => natural.width && setLines(defaultLines(natural.width, natural.height))} type="button">Reset lines</button>
+                <button className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800" onClick={() => natural.width && setLines(defaultLines(natural.width, natural.height))} type="button">Auto place lines</button>
+                <button className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60" disabled={busy || !lines} onClick={save} type="button">Save measurement</button>
+                <button className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800" onClick={onCancel} type="button">Cancel</button>
+              </div>
+              <div className="rounded-lg border border-slate-800 bg-slate-950/35 p-4 text-xs leading-6 text-slate-300">
+                <div className="mb-2 font-semibold text-slate-100">Centering reference</div>
+                <div>Gem Mint 10: 55/45 or better</div>
+                <div>Mint 9: 60/40 or better</div>
+                <div>NM-MT 8.5: 65/35 or better</div>
+                <div>NM-MT 8: 70/30 or better</div>
+                <div>EX-MT 7.5: 75/25 or better</div>
+                <div>Below 7: worse than 75/25</div>
+              </div>
+              {lines && (
+                <div className="text-[11px] text-slate-500">
+                  X: outer {scaleX(lines.outer_left_px)} / {scaleX(lines.outer_right_px)} · inner {scaleX(lines.inner_left_px)} / {scaleX(lines.inner_right_px)}<br />
+                  Y: outer {scaleY(lines.outer_top_px)} / {scaleY(lines.outer_bottom_px)} · inner {scaleY(lines.inner_top_px)} / {scaleY(lines.inner_bottom_px)}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
       </div>
     </div>
   );

@@ -4,6 +4,7 @@ from typing import Optional
 from sqlmodel import Field, SQLModel
 
 from .prices import GradingOpportunityRead, PriceObservationRead
+from .centering import CenteringMeasurementRead
 
 
 class AnalysisRunRead(SQLModel):
@@ -127,6 +128,7 @@ class AnalysisReportRead(SQLModel):
     recommendation: Optional[str] = None
     recommendation_reason: Optional[str] = None
     latest_price: Optional[PriceObservationRead] = None
+    latest_centering: Optional[CenteringMeasurementRead] = None
     opportunity_precheck: Optional[GradingOpportunityRead] = None
     assets: list[AnalysisAssetRead]
     findings: list[AnalysisFindingRead] = Field(default_factory=list)

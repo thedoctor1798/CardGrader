@@ -11,17 +11,17 @@ from sqlmodel import Session, select
 from ..config import MEDIA_DIR, ROOT
 from ..models import AnalysisAsset, AnalysisFinding, AnalysisRun, CardMedia, OwnedCard
 
-ANALYSIS_VERSION = "opencv_mvp_v2_normalized"
+ANALYSIS_VERSION = "opencv_mvp_v3_resized_only"
 NORMALIZED_WIDTH = 1000
 NORMALIZED_HEIGHT = 1400
 MIN_CARD_AREA_RATIO = 0.18
 CARD_ASPECT_MIN = 0.52
 CARD_ASPECT_MAX = 0.9
 SUMMARY_HU = (
-    "Lokalis OpenCV eloelemzes elkeszult. A rendszer resized es normalizalt "
-    "kartya-kepeket keszit, majd a sarok- es elkivagasokat a normalizalt "
-    "kartya kepbol generalja. A centering pontszam MVP becsles, nem vegleges "
-    "grading ertek."
+    "Lokalis OpenCV eloelemzes elkeszult. A rendszer resized front/back kepeket "
+    "es alap kepminosegi metrikakat keszit. Az automatikus sarok- es elkivagasok "
+    "a normal grading flow-ban jelenleg ki vannak kapcsolva, mert kezi ellenorzes "
+    "nelkul megbizhatatlanok."
 )
 
 
@@ -401,47 +401,6 @@ def process_media_image(session: Session, analysis_run: AnalysisRun, media: Card
     resized_path = MEDIA_DIR / "resized" / str(analysis_run.id) / f"{label}_resized.jpg"
     write_jpeg(resized_path, resized)
     add_asset(session, analysis_run.id, "resized_image", f"{label}_resized", resized_path)
-
-    normalization = normalize_card_image(resized)
-    debug_dir = MEDIA_DIR / "annotated" / str(analysis_run.id)
-    overlay_path = debug_dir / f"{label}_detected_contour_overlay.jpg"
-    write_jpeg(overlay_path, normalization.overlay)
-    add_asset(session, analysis_run.id, "opencv_debug", f"{label}_detected_contour_overlay", overlay_path)
-
-    if normalization.normalized is None:
-        add_preprocessing_warning(
-            session,
-            analysis_run.id,
-            media.id,
-            label,
-            f"{label} card normalization failed",
-            normalization.warning or "OpenCV could not detect a reliable card contour.",
-        )
-    else:
-        normalized_path = MEDIA_DIR / "normalized" / str(analysis_run.id) / f"{label}_normalized.jpg"
-        write_jpeg(normalized_path, normalization.normalized)
-        add_asset(session, analysis_run.id, "normalized_image", f"{label}_normalized", normalized_path)
-
-        preview_path = debug_dir / f"{label}_normalized_preview.jpg"
-        write_jpeg(preview_path, normalization.normalized)
-        add_asset(session, analysis_run.id, "opencv_debug", f"{label}_normalized_preview", preview_path)
-
-        crop_dir = MEDIA_DIR / "crops" / str(analysis_run.id)
-        for crop_label, crop_image in crop_regions(normalization.normalized).items():
-            asset_label = f"{label}_{crop_label}"
-            if not crop_is_valid(crop_image):
-                add_preprocessing_warning(
-                    session,
-                    analysis_run.id,
-                    media.id,
-                    asset_label,
-                    f"{asset_label} crop skipped",
-                    "OpenCV skipped this crop because the normalized crop did not contain enough usable detail.",
-                )
-                continue
-            crop_path = crop_dir / f"{asset_label}.jpg"
-            write_jpeg(crop_path, crop_image)
-            add_asset(session, analysis_run.id, "crop", asset_label, crop_path)
 
     add_metrics_finding(session, analysis_run.id, media.id, label, metrics)
     return metrics

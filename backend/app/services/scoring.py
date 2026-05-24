@@ -2,6 +2,7 @@ from fastapi import HTTPException
 from sqlmodel import Session, select
 
 from ..models import AnalysisFinding, AnalysisRun, Card, OwnedCard, PriceObservation
+from .centering import latest_manual_centering
 from .pricing import calculate_grading_opportunity, get_latest_price_for_card
 
 SEVERITY_PENALTIES = {
@@ -300,7 +301,12 @@ def score_analysis_run(session: Session, analysis_run_id: int) -> AnalysisRun:
     findings = load_findings(session, analysis_run.id)
     low_confidence = analysis_run.confidence_level == "low"
 
-    centering_score = analysis_run.centering_score if analysis_run.centering_score is not None else 8.0
+    manual_centering = latest_manual_centering(session, analysis_run.owned_card_id)
+    centering_score = (
+        manual_centering.centering_score
+        if manual_centering is not None and manual_centering.centering_score is not None
+        else analysis_run.centering_score if analysis_run.centering_score is not None else 8.0
+    )
     corners_score = 8.3 if low_confidence else 8.8
     edges_score = 8.3 if low_confidence else 8.8
     surface_score = 8.0 if low_confidence else 8.5
@@ -342,6 +348,11 @@ def score_analysis_run(session: Session, analysis_run_id: int) -> AnalysisRun:
     analysis_run.recommendation = recommendation
     analysis_run.recommendation_reason = recommendation_reason_for(recommendation, opportunity)
     analysis_run.human_summary = human_summary_with_findings(analysis_run, opportunity, findings)
+    if manual_centering is not None:
+        analysis_run.human_summary += (
+            f" Manualis centering meres hasznalva: L/R {manual_centering.horizontal_ratio_label}, "
+            f"T/B {manual_centering.vertical_ratio_label} ({manual_centering.estimated_grade_label})."
+        )
 
     session.add(analysis_run)
     session.commit()

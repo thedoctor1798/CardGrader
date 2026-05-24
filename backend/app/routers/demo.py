@@ -11,6 +11,7 @@ from ..models import (
     AnalysisRun,
     Card,
     CardMedia,
+    CenteringMeasurement,
     CollectionSnapshot,
     OwnedCard,
     PriceObservation,
@@ -101,6 +102,7 @@ def reset_local_data(session: Session = Depends(get_session)):
     deleted = {
         "analysis_assets": delete_all_rows(session, AnalysisAsset),
         "analysis_findings": delete_all_rows(session, AnalysisFinding),
+        "centering_measurements": delete_all_rows(session, CenteringMeasurement),
         "analysis_runs": delete_all_rows(session, AnalysisRun),
         "card_media": delete_all_rows(session, CardMedia),
         "price_observations": delete_all_rows(session, PriceObservation),

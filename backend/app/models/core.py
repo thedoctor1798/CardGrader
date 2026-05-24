@@ -156,3 +156,42 @@ class CollectionSnapshot(SQLModel, table=True):
     expected_value_huf: Optional[float] = None
     optimistic_value_huf: Optional[float] = None
     created_at: datetime = Field(default_factory=utc_now)
+
+
+class CenteringMeasurement(SQLModel, table=True):
+    __tablename__ = "centering_measurements"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    owned_card_id: int = Field(foreign_key="owned_cards.id")
+    analysis_run_id: Optional[int] = Field(default=None, foreign_key="analysis_runs.id")
+    media_id: Optional[int] = Field(default=None, foreign_key="card_media.id")
+    side: str
+    source: str = "manual"
+    image_label: Optional[str] = None
+    image_width: int
+    image_height: int
+    outer_left_px: float
+    outer_right_px: float
+    outer_top_px: float
+    outer_bottom_px: float
+    inner_left_px: float
+    inner_right_px: float
+    inner_top_px: float
+    inner_bottom_px: float
+    left_border_px: Optional[float] = None
+    right_border_px: Optional[float] = None
+    top_border_px: Optional[float] = None
+    bottom_border_px: Optional[float] = None
+    horizontal_ratio_label: Optional[str] = None
+    vertical_ratio_label: Optional[str] = None
+    horizontal_left_percent: Optional[float] = None
+    horizontal_right_percent: Optional[float] = None
+    vertical_top_percent: Optional[float] = None
+    vertical_bottom_percent: Optional[float] = None
+    horizontal_offcenter_percent: Optional[float] = None
+    vertical_offcenter_percent: Optional[float] = None
+    centering_score: Optional[float] = None
+    estimated_grade_label: Optional[str] = None
+    notes: Optional[str] = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
