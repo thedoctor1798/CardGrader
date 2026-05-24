@@ -1,0 +1,59 @@
+services:
+  cardgrader-backend:
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+    container_name: cardgrader-backend
+    restart: unless-stopped
+    user: "${CARDGRADER_UID:-1000}:${CARDGRADER_GID:-1000}"
+    environment:
+      APP_MODE: "${APP_MODE:-server}"
+      HOST: "0.0.0.0"
+      PORT: "8710"
+      DATABASE_URL: "${DATABASE_URL:-sqlite:////app/data/cardgrader.db}"
+      DATA_DIR: "${DATA_DIR:-/app/data}"
+      MEDIA_DIR: "${MEDIA_DIR:-/app/media}"
+      CATALOG_DIR: "${CATALOG_DIR:-/app/catalog}"
+      LOG_DIR: "${LOG_DIR:-/app/logs}"
+      LOCAL_AI_MODE: "${LOCAL_AI_MODE:-remote_worker}"
+      LOCAL_AI_WORKER_BASE_URL: "${LOCAL_AI_WORKER_BASE_URL:-http://100.x.y.z:8720}"
+      LOCAL_AI_TIMEOUT_SECONDS: "${LOCAL_AI_TIMEOUT_SECONDS:-300}"
+      LOCAL_AI_MAX_IMAGES: "${LOCAL_AI_MAX_IMAGES:-2}"
+      LOCAL_AI_MAX_TOKENS: "${LOCAL_AI_MAX_TOKENS:-4096}"
+      LOCAL_AI_DISABLE_THINKING: "${LOCAL_AI_DISABLE_THINKING:-true}"
+      LOCAL_AI_MODEL_NAME: "${LOCAL_AI_MODEL_NAME:-}"
+    volumes:
+      - ./data:/app/data
+      - ./media:/app/media
+      - ./catalog:/app/catalog
+      - ./logs:/app/logs
+    expose:
+      - "8710"
+    ports:
+      - "${BACKEND_PORT:-8710}:8710"
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8710/api/health', timeout=5).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+
+  cardgrader-frontend:
+    build:
+      context: .
+      dockerfile: frontend/Dockerfile
+      args:
+        VITE_API_BASE_URL: "${VITE_API_BASE_URL:-}"
+    container_name: cardgrader-frontend
+    restart: unless-stopped
+    depends_on:
+      cardgrader-backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-8080}:80"
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 10s

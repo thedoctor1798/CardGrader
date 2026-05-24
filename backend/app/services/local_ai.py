@@ -74,14 +74,19 @@ def require_local_ai_enabled() -> None:
     active_local_ai_provider().require_ready()
 
 
-def http_json(method: str, url: str, body: dict[str, Any] | None = None) -> dict[str, Any]:
+def http_json(
+    method: str,
+    url: str,
+    body: dict[str, Any] | None = None,
+    timeout_seconds: int | None = None,
+) -> dict[str, Any]:
     data = None
     headers = {"Content-Type": "application/json"}
     if body is not None:
         data = json.dumps(body).encode("utf-8")
     request = urllib.request.Request(url, data=data, method=method, headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=LOCAL_AI_TIMEOUT_SECONDS) as response:
+        with urllib.request.urlopen(request, timeout=timeout_seconds or LOCAL_AI_TIMEOUT_SECONDS) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body_text = exc.read().decode("utf-8", errors="replace")
@@ -224,7 +229,7 @@ class LMStudioDirectProvider(LocalAIProvider):
         if not self.is_localhost:
             raise HTTPException(status_code=400, detail="LOCAL_AI_BASE_URL must be localhost in server_local mode.")
         try:
-            response = http_json("GET", f"{self.base_url.rstrip('/')}/models")
+            response = http_json("GET", f"{self.base_url.rstrip('/')}/models", timeout_seconds=5)
             models = models_from_response(response)
             selected_model_found = LOCAL_AI_MODEL_NAME in models
             return {
@@ -268,7 +273,7 @@ class LMStudioDirectProvider(LocalAIProvider):
             return status
 
         try:
-            http_json("GET", f"{self.base_url.rstrip('/')}/models")
+            http_json("GET", f"{self.base_url.rstrip('/')}/models", timeout_seconds=5)
             status["reachable"] = True
             status["worker_reachable"] = True
             status["message"] = "Local AI server is reachable."
@@ -331,7 +336,7 @@ class RemoteWorkerProvider(LocalAIProvider):
         last_error: Exception | None = None
         for path in ["/api/local-ai/status", "/api/health", "/health"]:
             try:
-                return http_json("GET", f"{base}{path}")
+                return http_json("GET", f"{base}{path}", timeout_seconds=5)
             except Exception as exc:
                 last_error = exc
         raise ValueError(f"Remote Local AI worker is not reachable: {last_error}")
@@ -394,9 +399,13 @@ class RemoteWorkerProvider(LocalAIProvider):
             raise HTTPException(status_code=400, detail="Local AI is disabled.")
         if not self.worker_base_url:
             raise HTTPException(status_code=400, detail="LOCAL_AI_WORKER_BASE_URL is not configured.")
+        try:
+            self._worker_status()
+        except Exception as exc:
+            raise HTTPException(status_code=502, detail=f"Remote Local AI worker is not reachable: {exc}") from exc
         raise HTTPException(
             status_code=501,
-            detail="Remote Local AI worker analysis handoff is prepared but not implemented yet.",
+            detail="Remote Local AI worker is reachable, but analysis handoff is not implemented yet.",
         )
 
     def call_chat(self, prompt: str, assets: list[AnalysisAsset]) -> tuple[str, str, bool]:

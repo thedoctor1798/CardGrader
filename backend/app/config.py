@@ -18,13 +18,6 @@ if load_dotenv is not None:
     load_dotenv(BACKEND_DIR / ".env", override=False)
     load_dotenv(ROOT / ".env", override=False)
 
-HOST = "127.0.0.1"
-PORT = 8710
-
-DATA_DIR = ROOT / "data"
-MEDIA_DIR = ROOT / "media"
-
-
 def get_bool_env(name: str, default: bool = False) -> bool:
     value = os.getenv(name)
     if value is None:
@@ -44,6 +37,26 @@ def get_int_env(name: str, default: int) -> int:
 
 def get_clamped_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(maximum, get_int_env(name, default)))
+
+
+def get_path_env(name: str, default: Path) -> Path:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    path = Path(value).expanduser()
+    if not path.is_absolute():
+        path = ROOT / path
+    return path
+
+
+APP_MODE = os.getenv("APP_MODE", "local").strip().lower() or "local"
+HOST = os.getenv("HOST", "127.0.0.1")
+PORT = get_int_env("PORT", 8710)
+DATA_DIR = get_path_env("DATA_DIR", ROOT / "data")
+MEDIA_DIR = get_path_env("MEDIA_DIR", ROOT / "media")
+CATALOG_DIR = get_path_env("CATALOG_DIR", ROOT / "catalog")
+LOG_DIR = get_path_env("LOG_DIR", ROOT / "logs")
+DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{(DATA_DIR / 'cardgrader.db').as_posix()}")
 
 
 LOCAL_AI_MODES = {"disabled", "server_local", "remote_worker"}

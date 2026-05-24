@@ -53,6 +53,78 @@ Invoke-RestMethod -Method Get -Uri http://127.0.0.1:8710/api/health
 
 Opening http://127.0.0.1:8710 returns local app metadata.
 
+## Linux Server Docker Deployment
+
+Docker deployment is additive and does not replace the Windows `.bat` development workflow.
+
+Target layout:
+
+- Linux server runs CardGrader backend, frontend, SQLite data, media, catalog files, logs, and future metrics.
+- Windows gamer PC runs LM Studio and the local vision model.
+- Server and Windows PC communicate only over Tailscale/private networking.
+- Local AI is not expected to run inside the server container.
+
+On the Linux server:
+
+```bash
+git clone <your-repo-url> CardGrader
+cd CardGrader
+cp .env.server.example .env.server
+mkdir -p data media catalog logs
+sudo chown -R "$(id -u):$(id -g)" data media catalog logs
+```
+
+Edit `.env.server`:
+
+```text
+LOCAL_AI_MODE=remote_worker
+LOCAL_AI_WORKER_BASE_URL=http://<TAILSCALE_CLIENT_IP_OR_HOSTNAME>:<PORT>
+LOCAL_AI_MODEL_NAME=<your-local-vision-model>
+```
+
+Start the stack:
+
+```bash
+docker compose --env-file .env.server up -d --build
+```
+
+Check status:
+
+```bash
+docker compose ps
+docker compose logs -f cardgrader-backend
+curl http://127.0.0.1:8710/api/health
+curl http://127.0.0.1:8080/
+```
+
+Default published ports:
+
+- Frontend nginx: `http://SERVER_IP:8080`
+- Backend API: `http://SERVER_IP:8710`
+
+Persistent server folders:
+
+- `./data:/app/data`
+- `./media:/app/media`
+- `./catalog:/app/catalog`
+- `./logs:/app/logs`
+
+The frontend container serves the Vite production build with nginx and proxies `/api` and `/media` to the backend container. In production, `VITE_API_BASE_URL` can stay empty so browser requests use the same host that served the frontend.
+
+### Tailscale And Remote Local AI
+
+The server and Windows gamer PC must be on the same Tailscale tailnet. Use the Windows PC Tailscale IP, for example `100.x.y.z`, or its MagicDNS hostname in `LOCAL_AI_WORKER_BASE_URL`.
+
+LM Studio normally binds to localhost only. Direct remote access from the Linux server works only if LM Studio is explicitly configured to listen on a network/Tailscale interface and firewall rules allow it. The safer long-term path is a small CardGrader AI worker bridge on the Windows PC that exposes only controlled Local AI endpoints to the server over Tailscale.
+
+Keep access private:
+
+- Prefer Tailscale IP/MagicDNS, not public IPs.
+- Keep UFW/firewall rules limited to trusted Tailscale traffic where possible.
+- Do not add OpenAI, cloud AI, external AI APIs, cloud storage, or AI API keys.
+
+If the remote worker is not reachable, `/api/local-ai/status` and the Settings page show a clear worker error. The backend should keep running.
+
 ## Seed Rowlet Demo
 
 ```powershell
@@ -404,10 +476,14 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8710/api/local-ai/test-conn
 
 - Database: `data/cardgrader.db`
 - Media folders: `media/originals`, `media/resized`, `media/normalized`, `media/crops`, `media/annotated`, `media/video_frames`, `media/reports`
+- Catalog files: `catalog/`
+- Logs: `logs/`
+- Linux server env example: `.env.server.example`
+- Windows local backend env example: `backend/.env.local.example`
 
 Do not commit local database or media files.
 
-Do not commit `backend/.env`, local SQLite databases, uploaded media, generated media, or Local AI debug report files.
+Do not commit `.env`, `.env.*`, `backend/.env`, local SQLite databases, uploaded media, generated media, catalog imports, logs, or Local AI debug report files. Example env files are safe to commit.
 
 ## Troubleshooting
 

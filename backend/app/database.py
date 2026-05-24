@@ -1,14 +1,11 @@
-from pathlib import Path
 from sqlalchemy import inspect, text
 from sqlmodel import SQLModel, create_engine, Session
-from .config import DATA_DIR
+from .config import DATABASE_URL, DATA_DIR
 
 DATA_DIR.mkdir(parents=True, exist_ok=True)
 
-DB_FILE = DATA_DIR / "cardgrader.db"
-DATABASE_URL = f"sqlite:///{DB_FILE.as_posix()}"
-
-engine = create_engine(DATABASE_URL, connect_args={"check_same_thread": False})
+connect_args = {"check_same_thread": False} if DATABASE_URL.startswith("sqlite") else {}
+engine = create_engine(DATABASE_URL, connect_args=connect_args)
 
 def init_db():
     from . import models  # noqa: F401

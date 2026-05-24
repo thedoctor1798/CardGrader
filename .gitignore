@@ -9,19 +9,18 @@ backend/.venv/
 # Env
 .env
 .env.local
+.env.*
+!.env.example
+!.env.server.example
+!backend/.env.local.example
 
 # Local database / data
-data/*.db
-data/backups/
-data/exports/
+data/
+*.db
 
 # Media uploads
-media/originals/
-media/resized/
-media/crops/
-media/annotated/
-media/video_frames/
-media/reports/
+media/
+catalog/
 
 # Logs
 logs/
