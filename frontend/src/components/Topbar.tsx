@@ -1,11 +1,15 @@
 import { ShieldCheck } from "lucide-react";
+import { BrandLogo } from "./BrandLogo";
 
 export function Topbar() {
   return (
     <header className="sticky top-0 z-20 flex flex-col gap-3 border-b border-slate-800 bg-charcoal-900/90 px-5 py-4 backdrop-blur md:flex-row md:items-center md:justify-between">
-      <div>
-        <h1 className="text-lg font-semibold text-slate-100">CardGrader AI Local Edition</h1>
-        <p className="text-xs text-slate-500">Lokális gyűjtemény, ár és grading precheck</p>
+      <div className="flex items-center gap-3">
+        <BrandLogo className="h-9 w-9 shrink-0 lg:hidden" />
+        <div>
+          <h1 className="text-lg font-semibold text-slate-100">CardGrader AI Local Edition</h1>
+          <p className="text-xs text-slate-500">Lokális gyűjtemény, ár és grading precheck</p>
+        </div>
       </div>
       <div className="flex flex-wrap items-center gap-2">
         <input
