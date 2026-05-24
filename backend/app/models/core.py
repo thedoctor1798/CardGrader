@@ -206,3 +206,41 @@ class CenteringMeasurement(SQLModel, table=True):
     notes: Optional[str] = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
+
+
+class RecognitionAttempt(SQLModel, table=True):
+    __tablename__ = "recognition_attempts"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    media_id: int = Field(foreign_key="card_media.id", index=True)
+    owned_card_id: Optional[int] = Field(default=None, foreign_key="owned_cards.id", index=True)
+    status: str = Field(default="pending", index=True)
+    mode: str = Field(default="remote_worker")
+    extracted_name: Optional[str] = None
+    extracted_card_number: Optional[str] = None
+    extracted_set_text: Optional[str] = None
+    extracted_set_code: Optional[str] = None
+    extracted_rarity: Optional[str] = None
+    extracted_language: Optional[str] = None
+    extracted_raw_json: Optional[str] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class RecognitionCandidate(SQLModel, table=True):
+    __tablename__ = "recognition_candidates"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    recognition_attempt_id: int = Field(foreign_key="recognition_attempts.id", index=True)
+    catalog_card_id: int = Field(foreign_key="cards.id", index=True)
+    score: float = Field(default=0.0, index=True)
+    rank: int = Field(default=0, index=True)
+    match_reasons: Optional[str] = None
+    name_score: Optional[float] = None
+    number_score: Optional[float] = None
+    set_score: Optional[float] = None
+    rarity_score: Optional[float] = None
+    language_score: Optional[float] = None
+    created_at: datetime = Field(default_factory=utc_now)

@@ -17,6 +17,7 @@ import type {
   PriceObservation,
   RemoteAIGradeResponse,
   RemoteAIWorkerResult,
+  RecognitionResponse,
 } from "../api/types";
 import { EmptyState } from "../components/EmptyState";
 import { GlobalLoadingOverlay } from "../components/GlobalLoadingOverlay";
@@ -192,6 +193,72 @@ function RemoteAIGradePanel({ response }: { response: RemoteAIGradeResponse }) {
   );
 }
 
+function RecognitionPanel({
+  result,
+  busy,
+  onAccept,
+}: {
+  result: RecognitionResponse;
+  busy: boolean;
+  onAccept: (catalogCardId: number) => void;
+}) {
+  const extracted = result.recognition_attempt?.extracted;
+  return (
+    <div className={result.ok ? "mt-4 rounded-lg border border-blue-500/25 bg-blue-500/10 p-4 text-sm text-blue-50" : "mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-100"}>
+      <div className="font-semibold">{result.ok ? "Kártya felismerés" : "Felismerési hiba"}</div>
+      {result.message && <div className="mt-1 text-sm opacity-90">{result.message}</div>}
+      {extracted && (
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <StatCard label="Név" value={extracted.name || "-"} />
+          <StatCard label="Szám" value={extracted.card_number || "-"} />
+          <StatCard label="Set" value={extracted.set_text || extracted.set_code || "-"} />
+          <StatCard label="Ritkaság" value={extracted.rarity || "-"} />
+        </div>
+      )}
+      {result.ok && result.candidates.length === 0 && (
+        <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-amber-100">
+          Nem találtam elég erős katalógus jelöltet. Próbálj élesebb front képet, vagy használd a kézi megadást.
+        </div>
+      )}
+      {result.candidates.length > 0 && (
+        <div className="mt-4 space-y-2">
+          {result.candidates.map((candidate) => (
+            <div key={candidate.id} className="rounded-lg border border-slate-800 bg-slate-950/35 p-3">
+              <div className="flex items-start justify-between gap-3">
+                <div>
+                  <div className="font-medium text-slate-50">{candidate.rank}. {candidate.name}</div>
+                  <div className="mt-1 text-xs text-slate-400">
+                    {[candidate.set_name, candidate.set_code, candidate.card_number, candidate.rarity, candidate.language].filter(Boolean).join(" · ") || "-"}
+                  </div>
+                </div>
+                <div className="rounded-full border border-blue-500/30 px-2 py-0.5 text-xs text-blue-100">{formatNumber(candidate.score, 0)}%</div>
+              </div>
+              {candidate.match_reasons.length > 0 && (
+                <div className="mt-2 flex flex-wrap gap-1.5">
+                  {candidate.match_reasons.map((reason) => (
+                    <span key={reason} className="rounded-full border border-slate-700 px-2 py-0.5 text-[11px] text-slate-300">{reason}</span>
+                  ))}
+                </div>
+              )}
+              <div className="mt-3 flex flex-wrap gap-2">
+                <button className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-60" disabled={busy} onClick={() => onAccept(candidate.catalog_card_id)} type="button">
+                  Ez az
+                </button>
+                <button className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800/50" onClick={() => { window.location.hash = "#/collection"; }} type="button">
+                  Másikat választok
+                </button>
+                <button className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800/50" onClick={() => { window.location.hash = "#/collection"; }} type="button">
+                  Kézi megadás
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function FindingBadge({ children, tone = "default" }: { children: ReactNode; tone?: "default" | "warn" | "danger" }) {
   const toneClass =
     tone === "danger"
@@ -320,6 +387,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const [localAIDryRun, setLocalAIDryRun] = useState<LocalAIDryRun | null>(null);
   const [localAIDebug, setLocalAIDebug] = useState<LocalAIDebugSingleImageResponse | null>(null);
   const [remoteAIGrade, setRemoteAIGrade] = useState<RemoteAIGradeResponse | null>(null);
+  const [recognitionResult, setRecognitionResult] = useState<RecognitionResponse | null>(null);
   const [report, setReport] = useState<AnalysisReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
@@ -377,6 +445,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
     if (showPageLoading) setLoading(true);
     try {
       setRemoteAIGrade(null);
+      setRecognitionResult(null);
       const owned = await api.getOwnedCard(ownedCardId);
       setOwnedCard(owned);
       setOwnedEditForm(editFormFromOwnedCard(owned));
@@ -494,6 +563,44 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
       setScopedSuccess("media", "Szerkesztett kép mentve új derived media assetként.");
     } catch (err) {
       setScopedError("media", err instanceof Error ? err.message : "Kép szerkesztési hiba");
+    } finally {
+      setBusyLabel(null);
+    }
+  };
+
+  const recognizeSelectedImage = async () => {
+    if (!previewImage) {
+      setScopedError("media", "Nincs felismerhető kép.");
+      return;
+    }
+    setBusyLabel("Kártya felismerése...");
+    setNotice(null);
+    try {
+      const result = await api.recognizeCardFromMedia(previewImage.id);
+      setRecognitionResult(result);
+      if (result.ok) {
+        setScopedSuccess("media", `Felismerés kész. Találatok: ${result.candidates.length}.`);
+      } else {
+        setScopedError("media", result.message || "Nem sikerült felismerni a kártyát.");
+      }
+    } catch (err) {
+      setScopedError("media", err instanceof Error ? err.message : "Kártya felismerési hiba");
+    } finally {
+      setBusyLabel(null);
+    }
+  };
+
+  const acceptRecognitionCandidate = async (catalogCardId: number) => {
+    const attemptId = recognitionResult?.recognition_attempt?.id ?? recognitionResult?.recognition_attempt_id;
+    if (!attemptId) return;
+    setBusyLabel("Felismerés elfogadása...");
+    setNotice(null);
+    try {
+      const accepted = await api.acceptRecognitionCandidate(attemptId, catalogCardId, ownedCardId, false);
+      await load(false);
+      setScopedSuccess("details", `Kártya kiválasztva: ${accepted.owned_card.name}.`);
+    } catch (err) {
+      setScopedError("media", err instanceof Error ? err.message : "Felismerés elfogadási hiba");
     } finally {
       setBusyLabel(null);
     }
@@ -881,6 +988,22 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
               <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
                 Tölts fel legalább egy front vagy back képet az OpenCV elemzéshez.
               </div>
+            )}
+            <div className="mt-4 space-y-2">
+              <button
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/10 px-3 py-2 text-sm font-medium text-blue-100 hover:bg-blue-500/20 disabled:opacity-50"
+                disabled={busy || !previewImage || localAI?.mode !== "remote_worker"}
+                onClick={recognizeSelectedImage}
+                type="button"
+              >
+                <Play size={16} /> Kártya felismerése
+              </button>
+              {localAI?.mode !== "remote_worker" && (
+                <div className="text-xs text-slate-500">A felismerés a Windows AI Worker remote_worker módját használja.</div>
+              )}
+            </div>
+            {recognitionResult && (
+              <RecognitionPanel result={recognitionResult} busy={busy} onAccept={acceptRecognitionCandidate} />
             )}
             <form className="mt-4 space-y-3" onSubmit={handleUpload}>
               <FieldLabel label="Kép típusa">

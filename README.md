@@ -196,6 +196,67 @@ Common troubleshooting:
 - Model does not support images: load a vision-capable model in LM Studio.
 - Model returned invalid JSON: disable thinking, use a stronger vision model, reduce image count, or inspect the worker response preview.
 
+### Image-Based Card Recognition
+
+Phase 15.5 adds local image-based card recognition for uploaded media.
+
+Workflow:
+
+```text
+Upload image -> Kártya felismerése -> Windows AI Worker -> LM Studio -> local catalog matching -> accept candidate
+```
+
+The worker endpoint used for recognition is separate from grading:
+
+```text
+POST /api/ai/recognize-card
+```
+
+The backend endpoint is:
+
+```powershell
+Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8710/api/media/{media_id}/recognize-card
+```
+
+Acceptance endpoint:
+
+```powershell
+Invoke-RestMethod -Method Post `
+  -Uri http://127.0.0.1:8710/api/recognition-attempts/{attempt_id}/accept `
+  -ContentType "application/json" `
+  -Body '{"catalog_card_id":999,"owned_card_id":321,"create_owned_card":false}'
+```
+
+What recognition extracts:
+
+- card name
+- card number
+- set text/code
+- rarity
+- language hint
+- visible text snippets
+
+The backend stores each attempt in `recognition_attempts`, scores local catalog cards into `recognition_candidates`, and returns the top matches. Matching is weighted toward exact/normalized card number, exact/fuzzy name, set code/name, rarity, and language.
+
+Frontend flow:
+
+- Upload a front image.
+- Click `Kártya felismerése`.
+- Review top candidates.
+- Click `Ez az` to accept and link the current owned card to that catalog card.
+- Use `Másikat választok` or `Kézi megadás` to fall back to the collection/manual flow.
+
+Recognition troubleshooting:
+
+- Blurry image: upload a sharper front image where the name and collector number are visible.
+- Wrong crop/image: use the full front image, not a close-up that hides text.
+- Model cannot read small text: try a stronger vision model or a higher quality photo.
+- Catalog missing card: create the card manually, then retry later when catalog data is richer.
+- No candidates found: lower `CARD_RECOGNITION_MIN_SCORE` or improve extracted text/photo quality.
+- Wrong set/card number extracted: accept a different candidate manually or use manual entry.
+- Worker unreachable: check Tailscale, worker process, Windows Firewall, and `LOCAL_AI_WORKER_BASE_URL`.
+- Shared token mismatch: set the same `AI_WORKER_SHARED_TOKEN` in `.env.server` and `ai-worker/.env`.
+
 ## Seed Rowlet Demo
 
 ```powershell

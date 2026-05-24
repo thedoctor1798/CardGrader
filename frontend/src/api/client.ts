@@ -20,6 +20,8 @@ import type {
   LocalAIDryRun,
   LocalAITestConnection,
   RemoteAIGradeResponse,
+  RecognitionAcceptResponse,
+  RecognitionResponse,
   OwnedCard,
   PriceObservation,
   ResetLocalDataResponse,
@@ -46,7 +48,15 @@ async function request<T>(path: string, init?: RequestInit, options: RequestOpti
     let message = `${response.status} ${response.statusText}`;
     try {
       const data = await response.json();
-      message = data.detail ?? message;
+      if (typeof data.detail === "string") {
+        message = data.detail;
+      } else if (data.detail?.message) {
+        message = data.detail.message;
+      } else if (data.detail?.error) {
+        message = data.detail.error;
+      } else {
+        message = data.message ?? message;
+      }
     } catch {
       // Keep the HTTP status text when the backend does not return JSON.
     }
@@ -97,6 +107,17 @@ export const api = {
   },
   createDerivedMedia: (mediaId: number, body: DerivedMediaCreate) =>
     request<CardMedia>(`/api/media/${mediaId}/derive`, { method: "POST", body: JSON.stringify(body) }),
+  recognizeCardFromMedia: (mediaId: number) =>
+    request<RecognitionResponse>(`/api/media/${mediaId}/recognize-card`, { method: "POST" }),
+  acceptRecognitionCandidate: (attemptId: number, catalogCardId: number, ownedCardId?: number | null, createOwnedCard = false) =>
+    request<RecognitionAcceptResponse>(`/api/recognition-attempts/${attemptId}/accept`, {
+      method: "POST",
+      body: JSON.stringify({
+        catalog_card_id: catalogCardId,
+        owned_card_id: ownedCardId ?? null,
+        create_owned_card: createOwnedCard,
+      }),
+    }),
   getLatestOwnedCardPrice: (id: number) =>
     request<PriceObservation | null>(`/api/owned-cards/${id}/latest-price`, undefined, { notFoundAsNull: true }),
   createPrice: (cardId: number, body: Partial<PriceObservation>) =>

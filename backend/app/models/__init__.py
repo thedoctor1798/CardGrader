@@ -9,6 +9,8 @@ from .core import (
     CollectionSnapshot,
     OwnedCard,
     PriceObservation,
+    RecognitionAttempt,
+    RecognitionCandidate,
 )
 
 __all__ = [
@@ -21,4 +23,6 @@ __all__ = [
     "CollectionSnapshot",
     "OwnedCard",
     "PriceObservation",
+    "RecognitionAttempt",
+    "RecognitionCandidate",
 ]

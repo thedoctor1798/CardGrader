@@ -65,6 +65,12 @@ class GradeRequest(BaseModel):
     grading_profile: str = "pokemon_tcg_default"
 
 
+class RecognizeCardRequest(BaseModel):
+    media_id: str | None = None
+    images: list[WorkerImage] = Field(default_factory=list)
+    recognition_profile: str = "pokemon_tcg_default"
+
+
 def require_token(authorization: str | None = Header(default=None)) -> None:
     if not AI_WORKER_SHARED_TOKEN:
         return
@@ -233,12 +239,69 @@ Use this exact JSON shape:
   ],
   "summary": "Likely near mint, but minor whitening limits upside.",
   "psa_10_risk": "low | medium | high",
-  "recommended_action": "grade_candidate | review_manually_before_grading | do_not_grade"
+    "recommended_action": "grade_candidate | review_manually_before_grading | do_not_grade"
+}}{suffix}"""
+
+
+def build_recognition_prompt(request: RecognizeCardRequest) -> str:
+    no_thinking = (
+        "Do not think step by step. Do not output reasoning. Return only the final JSON object.\n\n"
+        if AI_WORKER_DISABLE_THINKING
+        else ""
+    )
+    suffix = "\n\n/no_think" if AI_WORKER_DISABLE_THINKING else ""
+    return f"""{no_thinking}You are identifying a Pokemon/TCG card from uploaded image(s).
+
+This task is recognition only. Do not grade condition. Do not estimate value.
+
+Extract only visible or strongly inferable identifiers. Prefer exact visible text over guessing. Do not invent card details. If a value is not visible, return null.
+
+Recognition profile: {request.recognition_profile}
+Media id: {request.media_id}
+
+Look for:
+- card name
+- collector/card number
+- set marker, set code, or set text
+- rarity symbol or rarity text
+- language hint
+- useful visible text snippets
+
+Return JSON only. Do not write markdown. Start with {{ and end with }}.
+
+Use this exact JSON shape:
+{{
+  "name": "Tangela",
+  "card_number": "218",
+  "set_text": "Ascended Heroes",
+  "set_code": "POR",
+  "rarity": "Illustration Rare",
+  "language": "en",
+  "visible_text_snippets": ["Tangela", "218", "POR"],
+  "confidence": "low | medium | high",
+  "notes": ["Name and number are visible. Set code appears to be POR."]
 }}{suffix}"""
 
 
 def lm_studio_payload(request: GradeRequest, model: str) -> dict[str, Any]:
     content: list[dict[str, Any]] = [{"type": "text", "text": build_prompt(request)}]
+    for image in request.images:
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{image.mime_type};base64,{image.base64}"},
+            }
+        )
+    return {
+        "model": model,
+        "messages": [{"role": "user", "content": content}],
+        "temperature": 0,
+        "max_tokens": AI_WORKER_MAX_TOKENS,
+    }
+
+
+def lm_studio_recognition_payload(request: RecognizeCardRequest, model: str) -> dict[str, Any]:
+    content: list[dict[str, Any]] = [{"type": "text", "text": build_recognition_prompt(request)}]
     for image in request.images:
         content.append(
             {
@@ -347,6 +410,99 @@ def grade_card(request: GradeRequest, _: None = Depends(require_token)) -> JSONR
                 "ok": False,
                 "error": "lm_studio_unreachable",
                 "message": "LM Studio is not reachable or timed out.",
+            }
+        )
+
+
+@app.post("/api/ai/recognize-card")
+def recognize_card(request: RecognizeCardRequest, _: None = Depends(require_token)) -> JSONResponse:
+    started = time.perf_counter()
+    logger.info("Recognition request received media_id=%s images=%s", request.media_id, len(request.images))
+    try:
+        request.images = validate_images(request.images)
+    except ValueError as exc:
+        logger.warning("Recognition request validation failed: %s", exc)
+        return JSONResponse({"ok": False, "error": "invalid_request", "message": str(exc)})
+
+    try:
+        model = selected_model()
+        if not model:
+            return JSONResponse({"ok": False, "error": "model_not_found", "message": "No LM Studio model is loaded."})
+    except Exception as exc:
+        logger.warning("LM Studio is not reachable for recognition: %s", exc)
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "local_model_unavailable",
+                "message": "The AI worker is running, but LM Studio is not reachable.",
+            }
+        )
+
+    try:
+        lm_payload = lm_studio_recognition_payload(request, model)
+        response = http_json("POST", f"{LM_STUDIO_BASE_URL}/chat/completions", lm_payload)
+        duration = round(time.perf_counter() - started, 2)
+        raw_content = response_content(response)
+        try:
+            parsed = parse_model_json(raw_content)
+        except Exception as exc:
+            logger.warning("Recognition JSON parse failed after %.2fs: %s", duration, exc)
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "model_response_not_valid_json",
+                    "message": "The model response was not valid JSON.",
+                    "raw_response_preview": raw_content[:1000],
+                }
+            )
+        if not any(parsed.get(key) for key in ["name", "card_number", "set_text", "set_code"]):
+            logger.info("Recognition completed but text was not readable duration=%.2fs", duration)
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "card_text_not_readable",
+                    "message": "The model could not reliably extract identifying card text from the image.",
+                    "raw_model_response": parsed,
+                }
+            )
+        logger.info("Recognition completed in %.2fs parse=ok", duration)
+        return JSONResponse(
+            {
+                "ok": True,
+                "extracted": {
+                    "name": parsed.get("name"),
+                    "card_number": parsed.get("card_number"),
+                    "set_text": parsed.get("set_text"),
+                    "set_code": parsed.get("set_code"),
+                    "rarity": parsed.get("rarity"),
+                    "language": parsed.get("language"),
+                    "visible_text_snippets": parsed.get("visible_text_snippets") or [],
+                },
+                "confidence": parsed.get("confidence") or "low",
+                "notes": parsed.get("notes") or [],
+                "model": model,
+                "duration_seconds": duration,
+                "raw_model_response": parsed,
+            }
+        )
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        logger.warning("LM Studio recognition returned HTTP %s", exc.code)
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "lm_studio_http_error",
+                "message": f"LM Studio returned HTTP {exc.code}.",
+                "raw_response_preview": body[:1000],
+            }
+        )
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        logger.warning("LM Studio recognition call failed: %s", exc)
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "local_model_unavailable",
+                "message": "The AI worker is running, but LM Studio is not reachable.",
             }
         )
 

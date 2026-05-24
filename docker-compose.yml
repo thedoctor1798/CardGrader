@@ -23,6 +23,8 @@ services:
       LOCAL_AI_DISABLE_THINKING: "${LOCAL_AI_DISABLE_THINKING:-true}"
       LOCAL_AI_MODEL_NAME: "${LOCAL_AI_MODEL_NAME:-}"
       AI_WORKER_SHARED_TOKEN: "${AI_WORKER_SHARED_TOKEN:-}"
+      CARD_RECOGNITION_TOP_K: "${CARD_RECOGNITION_TOP_K:-10}"
+      CARD_RECOGNITION_MIN_SCORE: "${CARD_RECOGNITION_MIN_SCORE:-30}"
     volumes:
       - ./data:/app/data
       - ./media:/app/media

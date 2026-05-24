@@ -386,6 +386,72 @@ export type RemoteAIGradeResponse = {
   image_labels_sent?: string[];
 };
 
+export type RecognitionExtracted = {
+  name?: string | null;
+  card_number?: string | null;
+  set_text?: string | null;
+  set_code?: string | null;
+  rarity?: string | null;
+  language?: string | null;
+};
+
+export type RecognitionAttempt = {
+  id: number;
+  media_id: number;
+  owned_card_id?: number | null;
+  status: string;
+  mode: string;
+  extracted: RecognitionExtracted;
+  error_code?: string | null;
+  error_message?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type RecognitionCandidate = {
+  id: number;
+  recognition_attempt_id: number;
+  catalog_card_id: number;
+  rank: number;
+  score: number;
+  name: string;
+  set_name?: string | null;
+  set_code?: string | null;
+  card_number?: string | null;
+  rarity?: string | null;
+  language?: string | null;
+  match_reasons: string[];
+  name_score?: number | null;
+  number_score?: number | null;
+  set_score?: number | null;
+  rarity_score?: number | null;
+  language_score?: number | null;
+};
+
+export type RecognitionResponse = {
+  ok: boolean;
+  recognition_attempt?: RecognitionAttempt | null;
+  candidates: RecognitionCandidate[];
+  error?: string | null;
+  message?: string | null;
+  recognition_attempt_id?: number | null;
+};
+
+export type RecognitionAcceptResponse = {
+  ok: boolean;
+  owned_card: {
+    id: number;
+    catalog_card_id: number;
+    card_id: number;
+    name: string;
+    set_name?: string | null;
+    set_code?: string | null;
+    card_number?: string | null;
+    rarity?: string | null;
+    language?: string | null;
+  };
+};
+
 export type LocalAIDryRun = {
   config: LocalAIConfig;
   opencv_analysis_run_id: number;

@@ -16,6 +16,13 @@ from .prices import (
     PriceObservationCreate,
     PriceObservationRead,
 )
+from .recognition import (
+    RecognitionAcceptRequest,
+    RecognitionAcceptResponse,
+    RecognitionAttemptRead,
+    RecognitionCandidateRead,
+    RecognitionResponse,
+)
 
 __all__ = [
     "AnalysisAssetRead",
@@ -41,4 +48,9 @@ __all__ = [
     "OwnedCardUpdate",
     "PriceObservationCreate",
     "PriceObservationRead",
+    "RecognitionAcceptRequest",
+    "RecognitionAcceptResponse",
+    "RecognitionAttemptRead",
+    "RecognitionCandidateRead",
+    "RecognitionResponse",
 ]

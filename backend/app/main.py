@@ -1,6 +1,6 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
-from .routers import analysis, cards, centering, collection, demo, health, local_ai, media, owned_cards, prices
+from .routers import analysis, cards, centering, collection, demo, health, local_ai, media, owned_cards, prices, recognition
 from .database import init_db
 from .utils.files import ensure_app_dirs
 from .config import APP_MODE, DATABASE_URL, HOST, LOCAL_AI_ENABLED, MEDIA_DIR, PORT
@@ -32,6 +32,7 @@ app.include_router(local_ai.router, prefix="/api")
 app.include_router(media.router)
 app.include_router(owned_cards.router, prefix="/api")
 app.include_router(prices.router, prefix="/api")
+app.include_router(recognition.router, prefix="/api")
 
 
 @app.get("/")
