@@ -41,3 +41,14 @@ Thumbs.db
 # Local test files
 /test.jpg
 /test.*
+
+# idk
+media/
+data/
+uploads/
+*.db
+*.sqlite
+*.sqlite3
+.env
+.env.*
+!.env.example
