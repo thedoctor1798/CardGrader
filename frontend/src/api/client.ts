@@ -25,7 +25,11 @@ import type {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "http://127.0.0.1:8710";
 
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
+type RequestOptions = {
+  notFoundAsNull?: boolean;
+};
+
+async function request<T>(path: string, init?: RequestInit, options: RequestOptions = {}): Promise<T> {
   const response = await fetch(`${API_BASE_URL}${path}`, {
     ...init,
     headers: init?.body instanceof FormData
@@ -34,6 +38,9 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
+    if (response.status === 404 && options.notFoundAsNull) {
+      return null as T;
+    }
     let message = `${response.status} ${response.statusText}`;
     try {
       const data = await response.json();
@@ -50,10 +57,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   return response.json() as Promise<T>;
 }
 
-export function mediaUrl(filePath?: string | null): string {
+export function mediaUrl(filePath?: string | null, cacheKey?: string | number | null): string {
   if (!filePath) return "";
   const normalized = filePath.replace(/\\/g, "/").replace(/^media\//, "");
-  return `${API_BASE_URL}/media/${normalized}`;
+  const version = cacheKey === null || cacheKey === undefined || cacheKey === "" ? "" : `?v=${encodeURIComponent(String(cacheKey))}`;
+  return `${API_BASE_URL}/media/${normalized}${version}`;
 }
 
 export const api = {
@@ -85,7 +93,8 @@ export const api = {
     body.append("file", file);
     return request<CardMedia>(`/api/owned-cards/${ownedCardId}/media`, { method: "POST", body });
   },
-  getLatestOwnedCardPrice: (id: number) => request<PriceObservation>(`/api/owned-cards/${id}/latest-price`),
+  getLatestOwnedCardPrice: (id: number) =>
+    request<PriceObservation | null>(`/api/owned-cards/${id}/latest-price`, undefined, { notFoundAsNull: true }),
   createPrice: (cardId: number, body: Partial<PriceObservation>) =>
     request<PriceObservation>(`/api/cards/${cardId}/prices`, {
       method: "POST",

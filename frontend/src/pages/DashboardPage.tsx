@@ -4,6 +4,7 @@ import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YA
 import { api } from "../api/client";
 import type { CollectionSnapshot, CollectionSummary } from "../api/types";
 import { EmptyState } from "../components/EmptyState";
+import { GlobalLoadingOverlay } from "../components/GlobalLoadingOverlay";
 import { LoadingState } from "../components/LoadingState";
 import { Panel } from "../components/Panel";
 import { StatCard } from "../components/StatCard";
@@ -19,8 +20,8 @@ export function DashboardPage() {
 
   const latestSnapshot = useMemo(() => snapshots[snapshots.length - 1] ?? null, [snapshots]);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (showPageLoading = true) => {
+    if (showPageLoading) setLoading(true);
     try {
       const [summaryData, snapshotData] = await Promise.all([
         api.getCollectionSummary(),
@@ -32,7 +33,7 @@ export function DashboardPage() {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ismeretlen hiba");
     } finally {
-      setLoading(false);
+      if (showPageLoading) setLoading(false);
     }
   }, []);
 
@@ -45,7 +46,7 @@ export function DashboardPage() {
     setMessage(null);
     try {
       await api.createCollectionSnapshot();
-      await load();
+      await load(false);
       setMessage("Snapshot mentve.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Snapshot mentési hiba");
@@ -72,7 +73,7 @@ export function DashboardPage() {
           <button
             className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
             disabled={busy}
-            onClick={load}
+            onClick={() => load()}
             type="button"
           >
             <RefreshCw size={16} />
@@ -92,6 +93,13 @@ export function DashboardPage() {
 
       {message && <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-200">{message}</div>}
       {error && <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-200">{error}</div>}
+      {busy && (
+        <GlobalLoadingOverlay
+          title="Snapshot készítése..."
+          subtitle="A lokális gyűjtemény-összesítő mentése folyamatban."
+          steps={["Értékek számítása", "Snapshot mentése", "Grafikon frissítése"]}
+        />
+      )}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
         <StatCard label="Összesített érték" value={formatHuf(summary.collection_value_huf)} tone="good" />

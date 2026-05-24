@@ -136,12 +136,26 @@ After creating a card you can:
 - Upload front/back images from the card detail page.
 - Add manual prices in the price panel.
 - Run OpenCV analysis.
-- Set manual centering with `Centering beallitasa` if you want centering ratios to override the automatic MVP estimate.
+- Set manual centering with `Centering beállítása` if you want centering ratios to override the automatic MVP estimate.
 - If configured, run Local AI analysis.
 
 The Rowlet demo seed remains available for testing, but it is no longer the main workflow.
 
-The main UI now keeps the normal grading workflow visible: add a card, upload front/back images, run OpenCV, run Local AI, review the report, and save manual prices. Developer and troubleshooting actions such as dry-run, single-image debug, and demo seed are grouped under collapsed `Fejlesztői / Debug eszközök` sections.
+The main Card Detail actions are intentionally limited to the normal grading flow:
+
+- `Kép feltöltése`
+- `OpenCV elemzés`
+- `Centering beállítása`
+- `Local AI elemzés`
+- `Ár mentése`
+- `Adatok szerkesztése`
+- `Új példány hozzáadása`
+
+Developer and troubleshooting actions such as Local AI dry-run, single-image debug, raw report/debug assets, demo/test actions, reset, cleanup, and annotation regeneration are grouped under collapsed `Fejlesztői / Debug eszközök` sections by default.
+
+Long-running local work such as OpenCV analysis, Local AI analysis, report refresh, centering save, media upload, and snapshot creation shows a centered blurred loading overlay. These states are local-only; there are no external API calls, cloud calls, or API keys.
+
+Missing latest price is normal for cards where no manual price has been recorded yet. The UI shows `Még nincs ár` / `Még nincs ár rögzítve.` and the manual price form remains usable.
 
 ## Media Upload Test
 
@@ -173,11 +187,11 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8710/api/analysis-runs/1/sc
 Invoke-RestMethod -Method Get -Uri http://127.0.0.1:8710/api/analysis-runs/1/report
 ```
 
-OpenCV preprocessing currently keeps the reliable parts only: resized front/back images and image quality metrics. Automatic corner/edge crops and automatic normalized card extraction are disabled from the normal grading and Local AI flow because they were unreliable without manual verification. Local AI uses full front/back resized images by default.
+OpenCV preprocessing currently keeps the reliable parts only: resized front/back images and image quality metrics. Automatic corner/edge crops are preserved for debugging, but they are hidden under `Auto crop / debug / unreliable` and labeled `Auto crop - nem használt gradinghez`. They are not used in the normal grading or Local AI flow.
 
 ## Manual Centering
 
-The card detail page includes `Centering beallitasa`.
+The card detail page includes `Centering beállítása`.
 
 - Red guide lines mark the outer card edges.
 - Blue guide lines mark the inner artwork/border boundaries.
@@ -241,6 +255,13 @@ Allowed local base URLs:
 - `http://localhost:8080/v1`
 
 Run OpenCV analysis first, then run Local AI analysis from the Card Detail page.
+
+By default Local AI sends only:
+
+- `front_resized`
+- `back_resized`, when available
+
+Front-only analysis uses only `front_resized`. Back-only analysis uses only `back_resized`. Aggregate review combines saved JSON findings from the front/back passes and does not send images. Unreliable OpenCV corner/edge crops are excluded unless you explicitly use debug tooling.
 
 Useful debug endpoints:
 
@@ -313,6 +334,8 @@ Invoke-RestMethod -Method Post -Uri http://127.0.0.1:8710/api/local-ai/test-conn
 - Media folders: `media/originals`, `media/resized`, `media/normalized`, `media/crops`, `media/annotated`, `media/video_frames`, `media/reports`
 
 Do not commit local database or media files.
+
+Do not commit `backend/.env`, local SQLite databases, uploaded media, generated media, or Local AI debug report files.
 
 ## Troubleshooting
 

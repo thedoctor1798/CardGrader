@@ -111,59 +111,32 @@ def bbox_region(finding: AnalysisFinding, width: int, height: int) -> tuple[int,
     y = int(finding.bbox_y or 0)
     w = int(finding.bbox_width or 0)
     h = int(finding.bbox_height or 0)
-    if w > 0 and h > 0:
-        left = max(0, min(width - 1, x))
-        top = max(0, min(height - 1, y))
-        right = max(left + 1, min(width, x + w))
-        bottom = max(top + 1, min(height, y + h))
-        return left, top, right, bottom
-    return None
-
-
-def has_valid_bbox(finding: AnalysisFinding) -> bool:
-    return bool((finding.bbox_width or 0) > 0 and (finding.bbox_height or 0) > 0)
+    if w <= 0 or h <= 0:
+        return None
+    image_area = max(1, width * height)
+    bbox_area = w * h
+    if bbox_area >= image_area * 0.65 or (w >= width * 0.9 and h >= height * 0.9):
+        return None
+    left = max(0, min(width - 1, x))
+    top = max(0, min(height - 1, y))
+    right = max(left + 1, min(width, x + w))
+    bottom = max(top + 1, min(height, y + h))
+    if right - left <= 1 or bottom - top <= 1:
+        return None
+    return left, top, right, bottom
 
 
 def should_annotate_finding(finding: AnalysisFinding) -> bool:
     finding_type = (finding.finding_type or "unknown").lower()
-    if has_valid_bbox(finding):
-        return finding_type not in NON_ANNOTATED_FINDING_TYPES or bool(finding.confirmed)
     if finding_type in NON_ANNOTATED_FINDING_TYPES:
         return False
     return finding_type in PHYSICAL_FINDING_TYPES and finding.confirmed is not False
 
 
-def fallback_region(finding: AnalysisFinding, width: int, height: int) -> tuple[int, int, int, int]:
-    text = " ".join(str(value or "").lower() for value in [finding.location_label, finding.title, finding.description])
-    corner_w = max(1, int(width * 0.28))
-    corner_h = max(1, int(height * 0.28))
-    edge_w = max(1, int(width * 0.20))
-    edge_h = max(1, int(height * 0.18))
-
-    if "top_left" in text or "corner_tl" in text or "bal felső" in text:
-        return 0, 0, corner_w, corner_h
-    if "top_right" in text or "corner_tr" in text or "jobb felső" in text:
-        return width - corner_w, 0, width, corner_h
-    if "bottom_left" in text or "corner_bl" in text or "bal alsó" in text:
-        return 0, height - corner_h, corner_w, height
-    if "bottom_right" in text or "corner_br" in text or "jobb alsó" in text:
-        return width - corner_w, height - corner_h, width, height
-    if "edge_top" in text or "top edge" in text:
-        return 0, 0, width, edge_h
-    if "edge_bottom" in text or "bottom edge" in text:
-        return 0, height - edge_h, width, height
-    if "edge_left" in text or "left edge" in text:
-        return 0, 0, edge_w, height
-    if "edge_right" in text or "right edge" in text:
-        return width - edge_w, 0, width, height
-    return int(width * 0.25), int(height * 0.25), int(width * 0.75), int(height * 0.75)
-
-
-def draw_finding_marker(image: Image.Image, finding: AnalysisFinding, marker_number: int) -> Image.Image:
+def draw_finding_marker(image: Image.Image, region: tuple[int, int, int, int], marker_number: int) -> Image.Image:
     annotated = image.convert("RGB")
     draw = ImageDraw.Draw(annotated)
     width, height = annotated.size
-    region = bbox_region(finding, width, height) or fallback_region(finding, width, height)
     line_width = max(3, int(min(width, height) * 0.006))
     draw.rectangle(region, outline=(255, 50, 50), width=line_width)
 
@@ -220,7 +193,10 @@ def generate_annotations(session: Session, analysis_run_id: int) -> dict:
             continue
 
         with Image.open(source_path) as image:
-            annotated = draw_finding_marker(image, finding, index)
+            region = bbox_region(finding, image.width, image.height)
+            if region is None:
+                continue
+            annotated = draw_finding_marker(image, region, index)
             output_path = output_dir / f"finding_{finding.id}_annotated.jpg"
             annotated.save(output_path, "JPEG", quality=92)
 

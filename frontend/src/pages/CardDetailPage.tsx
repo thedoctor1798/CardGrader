@@ -17,6 +17,7 @@ import type {
   PriceObservation,
 } from "../api/types";
 import { EmptyState } from "../components/EmptyState";
+import { GlobalLoadingOverlay } from "../components/GlobalLoadingOverlay";
 import { LoadingState } from "../components/LoadingState";
 import { Panel } from "../components/Panel";
 import { StatCard } from "../components/StatCard";
@@ -57,6 +58,20 @@ type OwnedEditForm = {
   acquired_source: string;
   storage_location: string;
   personal_notes: string;
+};
+
+type NoticeScope = "details" | "media" | "price" | "analysis" | "report";
+
+type InlineNoticeState = {
+  scope: NoticeScope;
+  tone: "success" | "error";
+  text: string;
+};
+
+type WorkOverlayState = {
+  title: string;
+  subtitle: string;
+  steps?: string[];
 };
 
 const emptyPriceForm: PriceForm = {
@@ -123,6 +138,91 @@ function severityTone(severity?: string | null): "default" | "warn" | "danger" {
   return "default";
 }
 
+function newestFirst<T extends { created_at?: string | null; id?: number | null }>(items: T[]): T[] {
+  return [...items].sort((a, b) => {
+    const byDate = new Date(b.created_at ?? 0).getTime() - new Date(a.created_at ?? 0).getTime();
+    if (byDate !== 0) return byDate;
+    return (b.id ?? 0) - (a.id ?? 0);
+  });
+}
+
+function cacheKeyFor(item: { id?: number | null; created_at?: string | null }): string | number | null {
+  return item.id ?? item.created_at ?? null;
+}
+
+function isPhotoQualityFinding(finding: AnalysisFinding): boolean {
+  const findingType = (finding.finding_type ?? "unknown").toLowerCase();
+  return (
+    finding.photo_quality_issue === true ||
+    finding.confirmed === false ||
+    findingType === "glare_uncertain" ||
+    findingType === "image_quality_issue" ||
+    findingType === "unknown"
+  );
+}
+
+function isAutoCropAsset(asset: AnalysisAsset): boolean {
+  const label = (asset.label ?? "").toLowerCase();
+  return asset.asset_type === "crop" || label.includes("corner") || label.includes("edge");
+}
+
+function isDebugAsset(asset: AnalysisAsset): boolean {
+  return Boolean(asset.asset_type?.startsWith("local_ai")) || asset.asset_type === "opencv_debug" || asset.asset_type === "normalized_image" || isAutoCropAsset(asset);
+}
+
+function annotatedFindingId(asset: AnalysisAsset): number | null {
+  const match = (asset.label ?? "").match(/^finding_(\d+)_annotated$/);
+  return match ? Number(match[1]) : null;
+}
+
+function assetDisplayLabel(asset: AnalysisAsset): string {
+  if (isAutoCropAsset(asset)) {
+    return `Auto crop - nem használt gradinghez: ${asset.label ?? asset.asset_type ?? "asset"}`;
+  }
+  return asset.label ?? asset.asset_type ?? "asset";
+}
+
+function workOverlayForLabel(label: string | null): WorkOverlayState | null {
+  if (!label) return null;
+  if (label.includes("Local AI") || label.includes("Front elemzés") || label.includes("Back elemzés") || label.includes("review")) {
+    return {
+      title: "Local AI elemzés fut...",
+      subtitle: "A lokális modell elemzi a kártyaképeket. Ez eltarthat pár percig.",
+      steps: ["front_resized/back_resized kiválasztása", "Lokális modell futtatása", "JSON eredmény mentése"],
+    };
+  }
+  if (label.includes("OpenCV") || label === "Elemzés fut...") {
+    return {
+      title: "OpenCV elemzés fut...",
+      subtitle: "Képek előkészítése és minőségi metrikák számítása.",
+      steps: ["Front/back képek beolvasása", "Resized assetek frissítése", "Report előkészítése"],
+    };
+  }
+  if (label.includes("Report") || label.includes("Score") || label.includes("Annot")) {
+    return {
+      title: "Report generálása...",
+      subtitle: "Pontszámok, annotációk és ajánlás frissítése.",
+      steps: ["Findingok rendezése", "Score számítása", "Report újratöltése"],
+    };
+  }
+  if (label.includes("Centering")) {
+    return {
+      title: "Centering mentése...",
+      subtitle: "A manuális centering mérés mentése és a pontszámok frissítése.",
+    };
+  }
+  if (label.includes("feltölt")) {
+    return {
+      title: "Kép feltöltése...",
+      subtitle: "A lokális media tár frissítése és az előnézet újratöltése.",
+    };
+  }
+  return {
+    title: label,
+    subtitle: "Lokális művelet folyamatban.",
+  };
+}
+
 export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const [ownedCard, setOwnedCard] = useState<OwnedCard | null>(null);
   const [card, setCard] = useState<Card | null>(null);
@@ -140,31 +240,38 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const [loading, setLoading] = useState(true);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [message, setMessage] = useState<string | null>(null);
+  const [notice, setNotice] = useState<InlineNoticeState | null>(null);
   const [uploadLabel, setUploadLabel] = useState("front");
   const [uploadFile, setUploadFile] = useState<File | null>(null);
   const [priceForm, setPriceForm] = useState<PriceForm>(emptyPriceForm);
   const [ownedEditForm, setOwnedEditForm] = useState<OwnedEditForm>(editFormFromOwnedCard(null));
   const [previewAsset, setPreviewAsset] = useState<AnalysisAsset | CardMedia | null>(null);
+  const [selectedPreviewSide, setSelectedPreviewSide] = useState<"front" | "back">("front");
   const [showCenteringEditor, setShowCenteringEditor] = useState(false);
 
   const busy = busyLabel !== null;
+  const workOverlay = workOverlayForLabel(busyLabel);
   const latestAnalysis = analysisRuns[0] ?? null;
   const visibleFindings = report?.findings?.length ? report.findings : findings;
   const hasAnalysisImage = media.some((item) => item.media_type === "image" && (item.label === "front" || item.label === "back"));
   const latestOpenCvAnalysis = analysisRuns.find((run) => run.mode === "local_only" && run.status === "completed") ?? null;
-  const frontFindings = visibleFindings.filter((finding) => finding.side === "front" && !finding.photo_quality_issue);
-  const backFindings = visibleFindings.filter((finding) => finding.side === "back" && !finding.photo_quality_issue);
-  const uncertainFindings = visibleFindings.filter((finding) => finding.photo_quality_issue || finding.finding_type === "glare_uncertain" || finding.confirmed === false);
+  const confirmedFindings = visibleFindings.filter((finding) => !isPhotoQualityFinding(finding));
+  const frontFindings = confirmedFindings.filter((finding) => finding.side === "front");
+  const backFindings = confirmedFindings.filter((finding) => finding.side === "back");
+  const otherConfirmedFindings = confirmedFindings.filter((finding) => finding.side !== "front" && finding.side !== "back");
+  const uncertainFindings = visibleFindings.filter(isPhotoQualityFinding);
   const localAIBlockedReason = !latestOpenCvAnalysis
-    ? "Elobb futtasd az OpenCV elemzest."
+    ? "Előbb futtasd az OpenCV elemzést."
     : !localAI?.enabled
       ? "Local AI nincs bekapcsolva."
       : !localAI.model_name
-        ? "LOCAL_AI_MODEL_NAME nincs beallitva."
+        ? "LOCAL_AI_MODEL_NAME nincs beállítva."
         : !localAI.reachable
-          ? "LM Studio nem erheto el."
+          ? "LM Studio nem érhető el."
           : null;
+
+  const setScopedSuccess = (scope: NoticeScope, text: string) => setNotice({ scope, tone: "success", text });
+  const setScopedError = (scope: NoticeScope, text: string) => setNotice({ scope, tone: "error", text });
 
   const loadReport = useCallback(async (analysisRunId: number | null) => {
     if (!analysisRunId) {
@@ -182,8 +289,8 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
     }
   }, []);
 
-  const load = useCallback(async () => {
-    setLoading(true);
+  const load = useCallback(async (showPageLoading = true) => {
+    if (showPageLoading) setLoading(true);
     try {
       const owned = await api.getOwnedCard(ownedCardId);
       setOwnedCard(owned);
@@ -194,7 +301,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
         api.getAnalysisRuns(ownedCardId),
       ]);
       setCard(cardData);
-      setMedia(mediaData);
+      setMedia(newestFirst(mediaData));
       setAnalysisRuns(runsData);
 
       try {
@@ -234,7 +341,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
     } catch (err) {
       setError(err instanceof Error ? err.message : "Ismeretlen hiba");
     } finally {
-      setLoading(false);
+      if (showPageLoading) setLoading(false);
     }
   }, [loadReport, ownedCardId]);
 
@@ -242,38 +349,50 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
     load();
   }, [load]);
 
-  const frontImage = useMemo(
-    () => media.find((item) => item.label === "front" && item.media_type === "image") ?? media.find((item) => item.media_type === "image"),
-    [media],
-  );
+  const imageMedia = useMemo(() => newestFirst(media.filter((item) => item.media_type === "image")), [media]);
+  const latestFrontImage = useMemo(() => imageMedia.find((item) => item.label === "front") ?? null, [imageMedia]);
+  const latestBackImage = useMemo(() => imageMedia.find((item) => item.label === "back") ?? null, [imageMedia]);
+  const latestUploadedImage = imageMedia[0] ?? null;
+  const previewImage = selectedPreviewSide === "front"
+    ? latestFrontImage ?? latestBackImage ?? latestUploadedImage
+    : latestBackImage ?? latestFrontImage ?? latestUploadedImage;
+
+  useEffect(() => {
+    if (selectedPreviewSide === "front" && !latestFrontImage && latestBackImage) {
+      setSelectedPreviewSide("back");
+    }
+    if (selectedPreviewSide === "back" && !latestBackImage && latestFrontImage) {
+      setSelectedPreviewSide("front");
+    }
+  }, [latestBackImage, latestFrontImage, selectedPreviewSide]);
 
   const groupedAssets = useMemo(() => {
     const assets = report?.assets ?? [];
+    const uncertainFindingIds = new Set(visibleFindings.filter(isPhotoQualityFinding).map((finding) => finding.id));
     return {
-      normalized: assets.filter((asset) => asset.asset_type === "normalized_image"),
-      crops: assets.filter((asset) => asset.asset_type === "crop"),
-      front: assets.filter((asset) => asset.label?.startsWith("front")),
-      back: assets.filter((asset) => asset.label?.startsWith("back")),
       resized: assets.filter((asset) => asset.asset_type === "resized_image"),
-      corners: assets.filter((asset) => asset.label?.includes("corner")),
-      edges: assets.filter((asset) => asset.label?.includes("edge")),
-      annotated: assets.filter((asset) => asset.asset_type === "annotated_image"),
-      debug: assets.filter((asset) => asset.asset_type?.startsWith("local_ai") || asset.asset_type === "opencv_debug" || asset.asset_type === "crop" || asset.asset_type === "normalized_image"),
+      annotated: assets.filter((asset) => {
+        if (asset.asset_type !== "annotated_image") return false;
+        const findingId = annotatedFindingId(asset);
+        return findingId === null || !uncertainFindingIds.has(findingId);
+      }),
+      debug: assets.filter(isDebugAsset),
     };
-  }, [report]);
+  }, [report, visibleFindings]);
 
   const handleUpload = async (event: FormEvent) => {
     event.preventDefault();
     if (!uploadFile) return;
     setBusyLabel("Kép feltöltése...");
-    setMessage(null);
+    setNotice(null);
     try {
       await api.uploadMedia(ownedCardId, uploadLabel, uploadFile);
       setUploadFile(null);
-      await load();
-      setMessage("Kép feltöltve.");
+      await load(false);
+      if (uploadLabel === "front" || uploadLabel === "back") setSelectedPreviewSide(uploadLabel);
+      setScopedSuccess("media", "Kép feltöltve.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Feltöltési hiba");
+      setScopedError("media", err instanceof Error ? err.message : "Feltöltési hiba");
     } finally {
       setBusyLabel(null);
     }
@@ -283,7 +402,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
     event.preventDefault();
     if (!ownedCard) return;
     setBusyLabel("Ár mentése...");
-    setMessage(null);
+    setNotice(null);
     try {
       const saved = await api.createPrice(ownedCard.card_id, {
         source_name: "manual",
@@ -298,9 +417,9 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
       setLatestPrice(saved);
       setPriceForm(formFromPrice(saved));
       if (latestAnalysis) await loadReport(latestAnalysis.id);
-      setMessage("Ár mentve.");
+      setScopedSuccess("price", "Ár mentve.");
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Ár mentési hiba");
+      setScopedError("price", err instanceof Error ? err.message : "Ár mentési hiba");
     } finally {
       setBusyLabel(null);
     }
@@ -310,7 +429,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
     event.preventDefault();
     if (!ownedCard) return;
     setBusyLabel("Adatok mentese...");
-    setMessage(null);
+    setNotice(null);
     try {
       const updated = await api.updateOwnedCard(ownedCard.id, {
         copy_label: ownedEditForm.copy_label.trim() || null,
@@ -322,10 +441,10 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
       });
       setOwnedCard(updated);
       setOwnedEditForm(editFormFromOwnedCard(updated));
-      setMessage("Adatok mentve.");
+      setScopedSuccess("details", "Adatok mentve.");
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Adatmentesi hiba");
+      setScopedError("details", err instanceof Error ? err.message : "Adatmentési hiba");
     } finally {
       setBusyLabel(null);
     }
@@ -334,7 +453,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const addCopyOfCurrentCard = async () => {
     if (!ownedCard) return;
     setBusyLabel("Uj peldany letrehozasa...");
-    setMessage(null);
+    setNotice(null);
     try {
       const copy = await api.createOwnedCard({
         card_id: ownedCard.card_id,
@@ -342,10 +461,10 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
         status: "raw_owned",
         acquired_source: "unknown",
       });
-      setMessage("Uj peldany hozzaadva.");
+      setScopedSuccess("details", "Új példány hozzáadva.");
       window.location.hash = `#/owned-cards/${copy.id}`;
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Uj peldany letrehozasi hiba");
+      setScopedError("details", err instanceof Error ? err.message : "Új példány létrehozási hiba");
     } finally {
       setBusyLabel(null);
     }
@@ -353,11 +472,11 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
 
   const runAnalysis = async () => {
     if (!hasAnalysisImage) {
-      setError("Tölts fel legalább egy front vagy back képet az OpenCV elemzéshez.");
+      setScopedError("analysis", "Tölts fel legalább egy front vagy back képet az OpenCV elemzéshez.");
       return;
     }
     setBusyLabel("Elemzés fut...");
-    setMessage(null);
+    setNotice(null);
     try {
       const newRun = await api.runOpenCvAnalysis(ownedCardId);
       setBusyLabel("Report frissítése...");
@@ -365,10 +484,10 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
       const runsData = await api.getAnalysisRuns(ownedCardId);
       setAnalysisRuns(runsData);
       await loadReport(newRun.id);
-      setMessage("OpenCV elemzés és score elkészült.");
+      setScopedSuccess("analysis", "OpenCV elemzés és score elkészült.");
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Elemzési hiba");
+      setScopedError("analysis", err instanceof Error ? err.message : "Elemzési hiba");
     } finally {
       setBusyLabel(null);
     }
@@ -377,16 +496,16 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const refreshScore = async () => {
     if (!latestAnalysis) return;
     setBusyLabel("Report frissítése...");
-    setMessage(null);
+    setNotice(null);
     try {
       await api.scoreAnalysisRun(latestAnalysis.id);
       const runsData = await api.getAnalysisRuns(ownedCardId);
       setAnalysisRuns(runsData);
       await loadReport(latestAnalysis.id);
-      setMessage("Score/report frissítve.");
+      setScopedSuccess("report", "Score/report frissítve.");
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Score/report hiba");
+      setScopedError("report", err instanceof Error ? err.message : "Score/report hiba");
     } finally {
       setBusyLabel(null);
     }
@@ -394,26 +513,26 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
 
   const runLocalAI = async () => {
     if (localAIBlockedReason) {
-      setError(localAIBlockedReason);
+      setScopedError("analysis", localAIBlockedReason);
       return;
     }
     setBusyLabel("Local AI elemzés fut...");
-    setMessage(null);
+    setNotice(null);
     try {
       const aiResult = await api.runLocalAIFullReview(ownedCardId);
       const runsData = await api.getAnalysisRuns(ownedCardId);
       setAnalysisRuns(runsData);
       await loadReport(aiResult.aggregate.analysis_run.id);
-      setMessage(`Local AI elemzés elkészült. Findingok: ${aiResult.aggregate.finding_count}.`);
+      setScopedSuccess("analysis", `Local AI elemzés elkészült. Findingok: ${aiResult.aggregate.finding_count}.`);
       setError(null);
     } catch (err) {
       const detail = err instanceof Error ? err.message : "Local AI elemzési hiba";
       if (detail.includes("reasoning-only")) {
-        setError("A lokális Qwen modell csak reasoning tartalmat adott vissza végleges JSON nélkül. Kapcsold ki a thinking módot (/no_think), vagy növeld a max token értéket.");
+        setScopedError("analysis", "A lokális Qwen modell csak reasoning tartalmat adott vissza végleges JSON nélkül. Kapcsold ki a thinking módot (/no_think), vagy növeld a max token értéket.");
       } else if (detail.includes("JSON")) {
-        setError("A lokális modell válasza nem volt feldolgozható JSON. A debug fájlok a media/reports mappában találhatók.");
+        setScopedError("analysis", "A lokális modell válasza nem volt feldolgozható JSON. A debug fájlok a media/reports mappában találhatók.");
       } else {
-        setError(detail);
+        setScopedError("analysis", detail);
       }
     } finally {
       setBusyLabel(null);
@@ -422,11 +541,11 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
 
   const runLocalAIPass = async (passType: "front" | "back") => {
     if (localAIBlockedReason) {
-      setError(localAIBlockedReason);
+      setScopedError("analysis", localAIBlockedReason);
       return;
     }
     setBusyLabel(passType === "front" ? "Front elemzés fut..." : "Back elemzés fut...");
-    setMessage(null);
+    setNotice(null);
     try {
       const result = passType === "front"
         ? await api.runLocalAIFrontAnalysis(ownedCardId)
@@ -434,10 +553,10 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
       const runsData = await api.getAnalysisRuns(ownedCardId);
       setAnalysisRuns(runsData);
       await loadReport(result.analysis_run.id);
-      setMessage(`${passType === "front" ? "Front" : "Back"} elemzés elkészült. Findingok: ${result.finding_count}.`);
+      setScopedSuccess("analysis", `${passType === "front" ? "Front" : "Back"} elemzés elkészült. Findingok: ${result.finding_count}.`);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Local AI pass hiba");
+      setScopedError("analysis", err instanceof Error ? err.message : "Local AI pass hiba");
     } finally {
       setBusyLabel(null);
     }
@@ -445,20 +564,20 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
 
   const runLocalAIFullReview = async () => {
     if (localAIBlockedReason) {
-      setError(localAIBlockedReason);
+      setScopedError("analysis", localAIBlockedReason);
       return;
     }
     setBusyLabel("Teljes local AI review fut...");
-    setMessage(null);
+    setNotice(null);
     try {
       const result = await api.runLocalAIFullReview(ownedCardId);
       const runsData = await api.getAnalysisRuns(ownedCardId);
       setAnalysisRuns(runsData);
       await loadReport(result.aggregate.analysis_run.id);
-      setMessage(`Teljes local AI review elkészült. Findingok: ${result.aggregate.finding_count}.`);
+      setScopedSuccess("analysis", `Teljes local AI review elkészült. Findingok: ${result.aggregate.finding_count}.`);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Teljes local AI review hiba");
+      setScopedError("analysis", err instanceof Error ? err.message : "Teljes local AI review hiba");
     } finally {
       setBusyLabel(null);
     }
@@ -466,18 +585,18 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
 
   const runLocalAIDryRun = async () => {
     if (!latestOpenCvAnalysis) {
-      setError("Elobb futtasd az OpenCV elemzest.");
+      setScopedError("analysis", "Előbb futtasd az OpenCV elemzést.");
       return;
     }
     setBusyLabel("Local AI dry-run...");
-    setMessage(null);
+    setNotice(null);
     try {
       const result = await api.runLocalAIDryRun(ownedCardId);
       setLocalAIDryRun(result);
-      setMessage(`Dry-run kesz. Kuldeni tervezett kepek: ${result.images_would_send}.`);
+      setScopedSuccess("analysis", `Dry-run kész. Küldeni tervezett képek: ${result.images_would_send}.`);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Local AI dry-run hiba");
+      setScopedError("analysis", err instanceof Error ? err.message : "Local AI dry-run hiba");
     } finally {
       setBusyLabel(null);
     }
@@ -485,18 +604,18 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
 
   const runLocalAIDebugSingleImage = async () => {
     if (localAIBlockedReason) {
-      setError(localAIBlockedReason);
+      setScopedError("analysis", localAIBlockedReason);
       return;
     }
     setBusyLabel("Local AI single-image debug...");
-    setMessage(null);
+    setNotice(null);
     try {
       const result = await api.runLocalAIDebugSingleImage(ownedCardId);
       setLocalAIDebug(result);
-      setMessage(`Single-image debug: ${result.status}.`);
+      setScopedSuccess("analysis", `Single-image debug: ${result.status}.`);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Local AI single-image debug hiba");
+      setScopedError("analysis", err instanceof Error ? err.message : "Local AI single-image debug hiba");
     } finally {
       setBusyLabel(null);
     }
@@ -505,14 +624,14 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const generateAnnotations = async () => {
     if (!latestAnalysis) return;
     setBusyLabel("Annotációk generálása...");
-    setMessage(null);
+    setNotice(null);
     try {
       const result = await api.annotateAnalysisRun(latestAnalysis.id);
       await loadReport(latestAnalysis.id);
-      setMessage(result.message);
+      setScopedSuccess("report", result.message);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Annotációs hiba");
+      setScopedError("report", err instanceof Error ? err.message : "Annotációs hiba");
     } finally {
       setBusyLabel(null);
     }
@@ -523,16 +642,16 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
       opencvAssets.find((asset) => asset.label === `${side}_normalized`)
       ?? opencvAssets.find((asset) => asset.label === `${side}_resized`);
     const mediaSource = (side: "front" | "back") =>
-      media.find((item) => item.label === side && item.media_type === "image");
+      imageMedia.find((item) => item.label === side);
     return {
       front: assetSource("front") ?? mediaSource("front") ?? null,
       back: assetSource("back") ?? mediaSource("back") ?? null,
     };
-  }, [media, opencvAssets]);
+  }, [imageMedia, opencvAssets]);
 
   const saveCenteringMeasurement = async (payload: Partial<CenteringMeasurement>) => {
     setBusyLabel("Centering mentése...");
-    setMessage(null);
+    setNotice(null);
     try {
       const saved = await api.createCenteringMeasurement(ownedCardId, payload);
       setLatestCentering(saved);
@@ -542,10 +661,10 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
         await api.scoreAnalysisRun(latestAnalysis.id);
         await loadReport(latestAnalysis.id);
       }
-      setMessage("Centering mérés mentve.");
+      setScopedSuccess("analysis", "Centering mérés mentve.");
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Centering mentési hiba");
+      setScopedError("analysis", err instanceof Error ? err.message : "Centering mentési hiba");
     } finally {
       setBusyLabel(null);
     }
@@ -557,8 +676,6 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
 
   return (
     <div className="space-y-4">
-      {message && <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-200">{message}</div>}
-      {busyLabel && <div className="rounded-lg border border-blue-500/30 bg-blue-500/10 p-3 text-sm text-blue-100">{busyLabel}</div>}
       {error && <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-200">{error}</div>}
 
       <div className="grid gap-4 xl:grid-cols-[370px_minmax(0,1fr)_430px]">
@@ -602,13 +719,38 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                 <button className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-60" disabled={busy} type="submit">Mentés</button>
                 <button className="rounded-lg border border-slate-700 px-3 py-2 text-sm font-medium text-slate-300 hover:bg-slate-800/50 disabled:opacity-60" disabled={busy} onClick={addCopyOfCurrentCard} type="button">Új példány hozzáadása</button>
               </div>
+              <InlineNotice notice={notice} scope="details" />
             </form>
           </Panel>
 
           <Panel title="Kép preview és feltöltés">
-            {frontImage ? (
-              <button className="block w-full text-left" onClick={() => setPreviewAsset(frontImage)} type="button">
-                <img alt={frontImage.label} className="aspect-[3/4] w-full rounded-xl border border-slate-800 object-cover" src={mediaUrl(frontImage.file_path)} />
+            {(latestFrontImage || latestBackImage) && (
+              <div className="mb-3 grid grid-cols-2 gap-2 rounded-lg border border-slate-800 bg-slate-950/35 p-1">
+                <button
+                  className={`rounded-md px-3 py-2 text-sm font-medium ${selectedPreviewSide === "front" ? "bg-blue-600 text-white" : "text-slate-300 hover:bg-slate-800/70"} disabled:cursor-not-allowed disabled:opacity-45`}
+                  disabled={!latestFrontImage}
+                  onClick={() => setSelectedPreviewSide("front")}
+                  type="button"
+                >
+                  Front
+                </button>
+                <button
+                  className={`rounded-md px-3 py-2 text-sm font-medium ${selectedPreviewSide === "back" ? "bg-blue-600 text-white" : "text-slate-300 hover:bg-slate-800/70"} disabled:cursor-not-allowed disabled:opacity-45`}
+                  disabled={!latestBackImage}
+                  onClick={() => setSelectedPreviewSide("back")}
+                  type="button"
+                >
+                  Back
+                </button>
+              </div>
+            )}
+            {previewImage ? (
+              <button className="block w-full text-left" onClick={() => setPreviewAsset(previewImage)} type="button">
+                <img alt={previewImage.label} className="aspect-[3/4] w-full rounded-xl border border-slate-800 object-cover" src={mediaUrl(previewImage.file_path, cacheKeyFor(previewImage))} />
+                <div className="mt-2 flex items-center justify-between gap-3 text-xs text-slate-400">
+                  <span>{previewImage.label}</span>
+                  <span>{formatDate(previewImage.created_at)}</span>
+                </div>
               </button>
             ) : (
               <EmptyState label="Még nincs feltöltött kép." />
@@ -628,6 +770,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
               <button className="inline-flex w-full items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-60" disabled={busy || !uploadFile} type="submit">
                 <Upload size={16} /> Kép feltöltése
               </button>
+              <InlineNotice notice={notice} scope="media" />
             </form>
           </Panel>
 
@@ -660,6 +803,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                 <textarea className="min-h-20 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" placeholder="pl. lokális manuális becslés" value={priceForm.notes} onChange={(event) => setPriceForm({ ...priceForm, notes: event.target.value })} />
               </FieldLabel>
               <button className="w-full rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60" disabled={busy} type="submit">Ár mentése</button>
+              <InlineNotice notice={notice} scope="price" />
             </form>
           </Panel>
         </div>
@@ -678,8 +822,8 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
               </button>
             </div>
             {localAIBlockedReason && <p className="mt-3 text-sm text-amber-200">{localAIBlockedReason}</p>}
-            {!localAI?.enabled && <p className="mt-3 text-sm text-amber-200">Local AI nincs bekapcsolva. Állítsd be az LM Studio/Ollama lokális szervert.</p>}
-            {localAI?.enabled && !localAI.reachable && <p className="mt-3 text-sm text-amber-200">{localAI.message}</p>}
+            {!localAIBlockedReason && !localAI?.enabled && <p className="mt-3 text-sm text-amber-200">Local AI nincs bekapcsolva. Állítsd be az LM Studio/Ollama lokális szervert.</p>}
+            {!localAIBlockedReason && localAI?.enabled && !localAI.reachable && <p className="mt-3 text-sm text-amber-200">{localAI.message}</p>}
             {latestAnalysis && (
               <div className="mt-4 grid grid-cols-2 gap-2">
                 <StatCard label="Status" value={latestAnalysis.status ?? "-"} />
@@ -688,6 +832,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                 <StatCard label="Version" value={latestAnalysis.analysis_version ?? "-"} />
               </div>
             )}
+            <InlineNotice notice={notice} scope="analysis" />
             <details className="mt-4 rounded-lg border border-slate-800 bg-slate-950/25 p-3">
               <summary className="cursor-pointer text-sm font-medium text-slate-300">Fejlesztői / Debug eszközök</summary>
               <div className="mt-3 grid gap-2 md:grid-cols-2">
@@ -794,9 +939,9 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                             {asset.asset_type?.startsWith("local_ai") ? (
                               <div className="flex aspect-square w-full items-center justify-center rounded bg-slate-950 p-2 text-center text-xs text-slate-400">debug file</div>
                             ) : (
-                              <img className="aspect-square w-full rounded object-cover" src={mediaUrl(asset.file_path)} alt={asset.label ?? "asset"} />
+                              <img className="aspect-square w-full rounded object-cover" src={mediaUrl(asset.file_path, cacheKeyFor(asset))} alt={asset.label ?? "asset"} />
                             )}
-                            <div className="mt-2 truncate text-xs text-slate-400">{asset.label}</div>
+                            <div className="mt-2 truncate text-xs text-slate-400">{assetDisplayLabel(asset)}</div>
                           </button>
                         ))}
                       </div>
@@ -807,7 +952,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                   <summary className="cursor-pointer text-sm font-medium text-slate-300">Fejlesztői / Debug eszközök</summary>
                   <div className="mt-4 space-y-4">
                     <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-sm text-amber-100">
-                      Auto crop / unreliable: a régi OpenCV crop assetek csak debug célra látszanak, gradinghez és Local AI-hoz nem használjuk őket.
+                      Auto crop / debug / unreliable: a régi OpenCV crop assetek csak debug célra látszanak, gradinghez és Local AI-hoz nem használjuk őket.
                     </div>
                     <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
                       {groupedAssets.debug.map((asset) => (
@@ -815,9 +960,9 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                           {asset.asset_type?.startsWith("local_ai") ? (
                             <div className="flex aspect-square w-full items-center justify-center rounded bg-slate-950 p-2 text-center text-xs text-slate-400">debug file</div>
                           ) : (
-                            <img className="aspect-square w-full rounded object-cover opacity-70" src={mediaUrl(asset.file_path)} alt={asset.label ?? "asset"} />
+                            <img className="aspect-square w-full rounded object-cover opacity-70" src={mediaUrl(asset.file_path, cacheKeyFor(asset))} alt={asset.label ?? "asset"} />
                           )}
-                          <div className="mt-2 truncate text-xs text-slate-400">{asset.label}</div>
+                          <div className="mt-2 truncate text-xs text-slate-400">{assetDisplayLabel(asset)}</div>
                         </button>
                       ))}
                     </div>
@@ -871,6 +1016,8 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                   <p className="mt-2 leading-6">{report.recommendation_reason}</p>
                 </div>
 
+                <InlineNotice notice={notice} scope="report" />
+
                 <details className="rounded-lg border border-slate-800 bg-slate-950/25 p-3">
                   <summary className="cursor-pointer text-sm font-medium text-slate-300">Fejlesztői / Debug eszközök</summary>
                   <div className="mt-3 flex flex-wrap gap-2">
@@ -883,30 +1030,10 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                   </div>
                 </details>
 
-                <FindingSection title="Front findings" findings={frontFindings} />
-                <FindingSection title="Back findings" findings={backFindings} />
+                <FindingSection title="Megerősített hibák - front" findings={frontFindings} />
+                <FindingSection title="Megerősített hibák - back" findings={backFindings} />
+                <FindingSection title="Megerősített hibák - egyéb" findings={otherConfirmedFindings} />
                 <FindingSection title="Bizonytalan / fotóminőségi jelzések" findings={uncertainFindings} />
-
-                {visibleFindings.length > 0 && (
-                  <div className="rounded-lg border border-slate-800 bg-charcoal-900 p-4">
-                    <h3 className="text-sm font-semibold text-slate-100">Talált hibák</h3>
-                    <div className="mt-3 space-y-3">
-                      {visibleFindings.map((finding) => (
-                        <div key={finding.id} className="rounded-lg border border-slate-800 bg-slate-950/25 p-3 text-sm">
-                          <div className="font-medium text-slate-100">{finding.title ?? "Finding"}</div>
-                          <div className="mt-2 flex flex-wrap gap-2">
-                            <FindingBadge>{finding.finding_type ?? "unknown"}</FindingBadge>
-                            <FindingBadge tone={severityTone(finding.severity)}>{finding.severity ?? "-"}</FindingBadge>
-                            <FindingBadge>confidence {formatNumber(finding.confidence, 2)}</FindingBadge>
-                            <FindingBadge tone={finding.grade_impact === "high" ? "danger" : "default"}>impact {finding.grade_impact ?? "-"}</FindingBadge>
-                          </div>
-                          <p className="mt-2 leading-5 text-slate-300">{finding.description}</p>
-                          <div className="mt-2 text-xs text-slate-500">{finding.location_label ?? "-"}</div>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
 
                 {(report.strengths.length > 0 || report.main_grade_limiters.length > 0 || report.manual_review_recommendations.length > 0) && (
                   <div className="grid gap-3">
@@ -942,6 +1069,8 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
         />
       )}
 
+      {workOverlay && <GlobalLoadingOverlay title={workOverlay.title} subtitle={workOverlay.subtitle} steps={workOverlay.steps} />}
+
       {previewAsset && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" onClick={() => setPreviewAsset(null)}>
           <div className="max-h-[92vh] w-full max-w-5xl overflow-hidden rounded-xl border border-slate-700 bg-charcoal-900" onClick={(event) => event.stopPropagation()}>
@@ -952,13 +1081,21 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
               </button>
             </div>
             <div className="p-4">
-              <img className="mx-auto max-h-[78vh] rounded-lg object-contain" src={mediaUrl(previewAsset.file_path)} alt={previewAsset.label ?? "preview"} />
+              <img className="mx-auto max-h-[78vh] rounded-lg object-contain" src={mediaUrl(previewAsset.file_path, cacheKeyFor(previewAsset))} alt={previewAsset.label ?? "preview"} />
             </div>
           </div>
         </div>
       )}
     </div>
   );
+}
+
+function InlineNotice({ notice, scope }: { notice: InlineNoticeState | null; scope: NoticeScope }) {
+  if (!notice || notice.scope !== scope) return null;
+  const classes = notice.tone === "success"
+    ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
+    : "border-rose-500/30 bg-rose-500/10 text-rose-200";
+  return <div className={`mt-3 rounded-lg border p-3 text-sm ${classes}`}>{notice.text}</div>;
 }
 
 function ReportList({ title, items }: { title: string; items: string[] }) {
@@ -1146,7 +1283,7 @@ function CenteringEditor({
               <div className="relative inline-block max-h-[72vh] max-w-full">
                 <img
                   className="block max-h-[72vh] w-auto max-w-full select-none"
-                  src={mediaUrl(source.file_path)}
+                  src={mediaUrl(source.file_path, cacheKeyFor(source))}
                   alt={source.label ?? side}
                   onLoad={(event) => initializeLines(event.currentTarget.naturalWidth, event.currentTarget.naturalHeight)}
                   draggable={false}

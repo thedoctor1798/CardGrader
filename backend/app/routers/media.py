@@ -155,7 +155,7 @@ def list_owned_card_media(
     statement = (
         select(CardMedia)
         .where(CardMedia.owned_card_id == owned_card_id)
-        .order_by(CardMedia.created_at)
+        .order_by(CardMedia.created_at.desc(), CardMedia.id.desc())
     )
     return session.exec(statement).all()
 

@@ -100,7 +100,7 @@ export function CollectionPage({ onOpenOwnedCard }: CollectionPageProps) {
           const card = cardList.find((item) => item.id === ownedCard.card_id) ?? null;
           try {
             const price = await api.getLatestOwnedCardPrice(ownedCard.id);
-            return { ...ownedCard, card, latest_raw_price_huf: price.raw_price_huf };
+            return { ...ownedCard, card, latest_raw_price_huf: price?.raw_price_huf ?? null };
           } catch {
             return { ...ownedCard, card, latest_raw_price_huf: null };
           }
@@ -320,7 +320,7 @@ export function CollectionPage({ onOpenOwnedCard }: CollectionPageProps) {
                   <td className="px-4 py-4 text-slate-300">{item.copy_label ?? "-"}</td>
                   <td className="px-4 py-4"><span className="rounded-full border border-slate-700 bg-slate-950/40 px-2 py-1 text-xs text-slate-300">{item.status ?? "-"}</span></td>
                   <td className="px-4 py-4 text-slate-300">{formatHuf(item.acquired_price_huf)}</td>
-                  <td className="px-4 py-4 text-slate-300">{formatHuf(item.latest_raw_price_huf)}</td>
+                  <td className="px-4 py-4 text-slate-300">{item.latest_raw_price_huf === null || item.latest_raw_price_huf === undefined ? "Még nincs ár" : formatHuf(item.latest_raw_price_huf)}</td>
                   <td className="px-4 py-4 text-right">
                     <button className="rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white shadow-sm shadow-blue-950/40 hover:bg-blue-500" onClick={() => onOpenOwnedCard(item.id)} type="button">
                       Megnyitás
