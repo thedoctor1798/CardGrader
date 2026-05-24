@@ -36,7 +36,27 @@ export type CardMedia = {
   width?: number | null;
   height?: number | null;
   file_size_bytes?: number | null;
+  derived_from_media_id?: number | null;
+  edit_type?: string | null;
+  edit_metadata?: string | null;
   created_at: string;
+};
+
+export type DerivedMediaCreate = {
+  label?: string | null;
+  edit_type?: string;
+  brightness?: number;
+  contrast?: number;
+  saturation?: number;
+  sharpness?: number;
+  gamma?: number;
+  exposure?: number;
+  rotate_degrees?: number;
+  crop_x?: number | null;
+  crop_y?: number | null;
+  crop_width?: number | null;
+  crop_height?: number | null;
+  edit_metadata?: Record<string, unknown> | null;
 };
 
 export type PriceObservation = {
@@ -147,6 +167,14 @@ export type CenteringMeasurement = {
   inner_right_px: number;
   inner_top_px: number;
   inner_bottom_px: number;
+  outer_left_pct?: number | null;
+  outer_right_pct?: number | null;
+  outer_top_pct?: number | null;
+  outer_bottom_pct?: number | null;
+  inner_left_pct?: number | null;
+  inner_right_pct?: number | null;
+  inner_top_pct?: number | null;
+  inner_bottom_pct?: number | null;
   left_border_px?: number | null;
   right_border_px?: number | null;
   top_border_px?: number | null;

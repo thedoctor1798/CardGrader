@@ -6,6 +6,7 @@ from typing import Optional
 import cv2
 import numpy as np
 from fastapi import HTTPException
+from sqlalchemy import or_
 from sqlmodel import Session, select
 
 from ..config import MEDIA_DIR, ROOT
@@ -82,11 +83,20 @@ def latest_image_media(session: Session, owned_card_id: int, label: str) -> Opti
     statement = (
         select(CardMedia)
         .where(CardMedia.owned_card_id == owned_card_id)
-        .where(CardMedia.label == label)
+        .where(or_(CardMedia.label == label, CardMedia.label.like(f"{label}_%")))
         .where(CardMedia.media_type == "image")
         .order_by(CardMedia.created_at.desc(), CardMedia.id.desc())
     )
     return session.exec(statement).first()
+
+
+def canonical_side_label(label: str | None) -> str:
+    normalized = (label or "image").lower()
+    if normalized == "front" or normalized.startswith("front_"):
+        return "front"
+    if normalized == "back" or normalized.startswith("back_"):
+        return "back"
+    return normalized
 
 
 def resize_for_analysis(image: np.ndarray, max_long_edge: int = 1600) -> np.ndarray:
@@ -392,7 +402,7 @@ def add_preprocessing_warning(
 
 
 def process_media_image(session: Session, analysis_run: AnalysisRun, media: CardMedia) -> ImageMetrics:
-    label = media.label or "image"
+    label = canonical_side_label(media.label)
     source_path = resolve_media_path(media.file_path)
     image = read_image(source_path)
     resized = resize_for_analysis(image)

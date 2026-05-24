@@ -1,6 +1,6 @@
-import { Play, RefreshCw, Upload, X } from "lucide-react";
-import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
-import type { PointerEvent, ReactNode } from "react";
+import { Crop, Play, RefreshCw, RotateCcw, Save, Upload, X } from "lucide-react";
+import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
+import type { PointerEvent, ReactNode, WheelEvent } from "react";
 import { api, mediaUrl } from "../api/client";
 import type {
   AnalysisAsset,
@@ -150,6 +150,13 @@ function cacheKeyFor(item: { id?: number | null; created_at?: string | null }): 
   return item.id ?? item.created_at ?? null;
 }
 
+function sideFromLabel(label?: string | null): "front" | "back" | null {
+  const normalized = (label ?? "").toLowerCase();
+  if (normalized === "front" || normalized.startsWith("front_")) return "front";
+  if (normalized === "back" || normalized.startsWith("back_")) return "back";
+  return null;
+}
+
 function isPhotoQualityFinding(finding: AnalysisFinding): boolean {
   const findingType = (finding.finding_type ?? "unknown").toLowerCase();
   return (
@@ -217,6 +224,12 @@ function workOverlayForLabel(label: string | null): WorkOverlayState | null {
       subtitle: "A lokális media tár frissítése és az előnézet újratöltése.",
     };
   }
+  if (label.includes("szerkeszt") || label.includes("crop")) {
+    return {
+      title: "Kép szerkesztése...",
+      subtitle: "A módosított kép új, lokális derived media assetként mentődik.",
+    };
+  }
   return {
     title: label,
     subtitle: "Lokális művelet folyamatban.",
@@ -253,7 +266,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const workOverlay = workOverlayForLabel(busyLabel);
   const latestAnalysis = analysisRuns[0] ?? null;
   const visibleFindings = report?.findings?.length ? report.findings : findings;
-  const hasAnalysisImage = media.some((item) => item.media_type === "image" && (item.label === "front" || item.label === "back"));
+  const hasAnalysisImage = media.some((item) => item.media_type === "image" && sideFromLabel(item.label) !== null);
   const latestOpenCvAnalysis = analysisRuns.find((run) => run.mode === "local_only" && run.status === "completed") ?? null;
   const confirmedFindings = visibleFindings.filter((finding) => !isPhotoQualityFinding(finding));
   const frontFindings = confirmedFindings.filter((finding) => finding.side === "front");
@@ -350,8 +363,8 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   }, [load]);
 
   const imageMedia = useMemo(() => newestFirst(media.filter((item) => item.media_type === "image")), [media]);
-  const latestFrontImage = useMemo(() => imageMedia.find((item) => item.label === "front") ?? null, [imageMedia]);
-  const latestBackImage = useMemo(() => imageMedia.find((item) => item.label === "back") ?? null, [imageMedia]);
+  const latestFrontImage = useMemo(() => imageMedia.find((item) => sideFromLabel(item.label) === "front") ?? null, [imageMedia]);
+  const latestBackImage = useMemo(() => imageMedia.find((item) => sideFromLabel(item.label) === "back") ?? null, [imageMedia]);
   const latestUploadedImage = imageMedia[0] ?? null;
   const previewImage = selectedPreviewSide === "front"
     ? latestFrontImage ?? latestBackImage ?? latestUploadedImage
@@ -393,6 +406,22 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
       setScopedSuccess("media", "Kép feltöltve.");
     } catch (err) {
       setScopedError("media", err instanceof Error ? err.message : "Feltöltési hiba");
+    } finally {
+      setBusyLabel(null);
+    }
+  };
+
+  const saveDerivedMedia = async (sourceMediaId: number, payload: Parameters<typeof api.createDerivedMedia>[1]) => {
+    setBusyLabel(payload.edit_type === "manual_crop" ? "Kép crop mentése..." : "Kép szerkesztés mentése...");
+    setNotice(null);
+    try {
+      const saved = await api.createDerivedMedia(sourceMediaId, payload);
+      await load(false);
+      const side = sideFromLabel(saved.label);
+      if (side) setSelectedPreviewSide(side);
+      setScopedSuccess("media", "Szerkesztett kép mentve új derived media assetként.");
+    } catch (err) {
+      setScopedError("media", err instanceof Error ? err.message : "Kép szerkesztési hiba");
     } finally {
       setBusyLabel(null);
     }
@@ -642,12 +671,17 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
       opencvAssets.find((asset) => asset.label === `${side}_normalized`)
       ?? opencvAssets.find((asset) => asset.label === `${side}_resized`);
     const mediaSource = (side: "front" | "back") =>
-      imageMedia.find((item) => item.label === side);
+      imageMedia.find((item) => sideFromLabel(item.label) === side);
     return {
       front: assetSource("front") ?? mediaSource("front") ?? null,
       back: assetSource("back") ?? mediaSource("back") ?? null,
     };
   }, [imageMedia, opencvAssets]);
+
+  const latestCenteringBySide = useMemo(() => ({
+    front: centeringMeasurements.find((measurement) => measurement.side === "front") ?? (latestCentering?.side === "front" ? latestCentering : null),
+    back: centeringMeasurements.find((measurement) => measurement.side === "back") ?? (latestCentering?.side === "back" ? latestCentering : null),
+  }), [centeringMeasurements, latestCentering]);
 
   const saveCenteringMeasurement = async (payload: Partial<CenteringMeasurement>) => {
     setBusyLabel("Centering mentése...");
@@ -773,6 +807,15 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
               <InlineNotice notice={notice} scope="media" />
             </form>
           </Panel>
+
+          <ImageEditingPanel
+            frontImage={latestFrontImage}
+            backImage={latestBackImage}
+            selectedSide={selectedPreviewSide}
+            busy={busy}
+            onSelectSide={setSelectedPreviewSide}
+            onSave={saveDerivedMedia}
+          />
 
           <Panel title="Ár precheck">
             {latestPrice ? (
@@ -989,19 +1032,15 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                   <StatCard label="Edges" value={formatNumber(report.scores.edges_score)} />
                   <StatCard label="Surface" value={formatNumber(report.scores.surface_score)} />
                 </div>
-                {(report.latest_centering || latestCentering) && (
+                {(latestCenteringBySide.front || latestCenteringBySide.back || report.latest_centering) && (
                   <div className="rounded-lg border border-cyan-500/25 bg-cyan-500/10 p-4 text-sm text-cyan-100">
-                    <div className="font-semibold">Centering: L/R {(report.latest_centering ?? latestCentering)?.horizontal_ratio_label}, T/B {(report.latest_centering ?? latestCentering)?.vertical_ratio_label} (manual)</div>
-                    <div className="mt-1">Score: {formatNumber((report.latest_centering ?? latestCentering)?.centering_score)} · {(report.latest_centering ?? latestCentering)?.estimated_grade_label}</div>
-                    {centeringMeasurements.length > 1 && (
-                      <div className="mt-3 space-y-1 text-xs text-cyan-200/80">
-                        {centeringMeasurements.slice(0, 3).map((measurement) => (
-                          <div key={measurement.id}>
-                            {measurement.side}: L/R {measurement.horizontal_ratio_label}, T/B {measurement.vertical_ratio_label} · {formatDate(measurement.created_at)}
-                          </div>
-                        ))}
-                      </div>
-                    )}
+                    <div className="mb-3 font-semibold">Manual centering</div>
+                    <div className="grid gap-3">
+                      {(["front", "back"] as const).map((measurementSide) => {
+                        const measurement = latestCenteringBySide[measurementSide] ?? (report.latest_centering?.side === measurementSide ? report.latest_centering : null);
+                        return measurement ? <CenteringMeasurementSummary key={measurementSide} measurement={measurement} /> : null;
+                      })}
+                    </div>
                   </div>
                 )}
                 <div className="grid grid-cols-2 gap-2">
@@ -1062,7 +1101,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
       {showCenteringEditor && (
         <CenteringEditor
           sources={centeringSources}
-          latest={latestCentering}
+          measurements={centeringMeasurements}
           busy={busy}
           onCancel={() => setShowCenteringEditor(false)}
           onSave={saveCenteringMeasurement}
@@ -1096,6 +1135,363 @@ function InlineNotice({ notice, scope }: { notice: InlineNoticeState | null; sco
     ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
     : "border-rose-500/30 bg-rose-500/10 text-rose-200";
   return <div className={`mt-3 rounded-lg border p-3 text-sm ${classes}`}>{notice.text}</div>;
+}
+
+function CenteringMeasurementSummary({ measurement }: { measurement: CenteringMeasurement }) {
+  const left = measurement.horizontal_left_percent ?? 50;
+  const right = measurement.horizontal_right_percent ?? 50;
+  const top = measurement.vertical_top_percent ?? 50;
+  const bottom = measurement.vertical_bottom_percent ?? 50;
+  const shiftX = left > right ? "jobbra tolódik" : right > left ? "balra tolódik" : "középen";
+  const shiftY = top > bottom ? "lefelé tolódik" : bottom > top ? "felfelé tolódik" : "középen";
+  return (
+    <div className="rounded-lg border border-cyan-300/20 bg-slate-950/30 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-cyan-200">{measurement.side}</div>
+          <div className="mt-1 font-medium text-slate-50">{measurement.estimated_grade_label ?? "-"}</div>
+        </div>
+        <div className="text-right text-xs text-cyan-100">
+          <div>Score {formatNumber(measurement.centering_score)}</div>
+          <div>{formatDate(measurement.created_at)}</div>
+        </div>
+      </div>
+      <div className="mt-3 space-y-2">
+        <CenteringRatioBar label="L/R" first={left} second={right} />
+        <CenteringRatioBar label="T/B" first={top} second={bottom} />
+      </div>
+      <div className="mt-2 text-xs text-cyan-200">{shiftX} · {shiftY}</div>
+    </div>
+  );
+}
+
+type ImageAdjustments = {
+  brightness: number;
+  contrast: number;
+  saturation: number;
+  sharpness: number;
+  gamma: number;
+  exposure: number;
+  rotate_degrees: number;
+};
+
+type CropRectPct = {
+  x: number;
+  y: number;
+  width: number;
+  height: number;
+};
+
+type CropHandle = "move" | "n" | "s" | "e" | "w" | "nw" | "ne" | "sw" | "se";
+
+const defaultAdjustments: ImageAdjustments = {
+  brightness: 1,
+  contrast: 1,
+  saturation: 1,
+  sharpness: 1,
+  gamma: 1,
+  exposure: 0,
+  rotate_degrees: 0,
+};
+
+const defaultCrop: CropRectPct = { x: 6, y: 5, width: 88, height: 90 };
+
+function clampPct(value: number, min = 0, max = 100): number {
+  return Math.max(min, Math.min(max, value));
+}
+
+function imageFilter(adjustments: ImageAdjustments): string {
+  const exposureMultiplier = 2 ** adjustments.exposure;
+  const gammaPreview = 1 / Math.sqrt(Math.max(0.2, adjustments.gamma));
+  const sharpnessPreview = 1 + (adjustments.sharpness - 1) * 0.08;
+  return [
+    `brightness(${adjustments.brightness * exposureMultiplier * gammaPreview})`,
+    `contrast(${adjustments.contrast * sharpnessPreview})`,
+    `saturate(${adjustments.saturation})`,
+  ].join(" ");
+}
+
+function cropToPixels(crop: CropRectPct, natural: { width: number; height: number }) {
+  return {
+    crop_x: (crop.x / 100) * natural.width,
+    crop_y: (crop.y / 100) * natural.height,
+    crop_width: (crop.width / 100) * natural.width,
+    crop_height: (crop.height / 100) * natural.height,
+  };
+}
+
+function AdjustmentSlider({
+  label,
+  value,
+  min,
+  max,
+  step,
+  onChange,
+}: {
+  label: string;
+  value: number;
+  min: number;
+  max: number;
+  step: number;
+  onChange: (value: number) => void;
+}) {
+  return (
+    <label className="space-y-1.5 text-xs font-medium text-slate-400">
+      <div className="flex items-center justify-between gap-3">
+        <span>{label}</span>
+        <span className="text-slate-500">{formatNumber(value, 2)}</span>
+      </div>
+      <input
+        className="w-full accent-blue-500"
+        max={max}
+        min={min}
+        onChange={(event) => onChange(Number(event.target.value))}
+        step={step}
+        type="range"
+        value={value}
+      />
+    </label>
+  );
+}
+
+function ImageEditingPanel({
+  frontImage,
+  backImage,
+  selectedSide,
+  busy,
+  onSelectSide,
+  onSave,
+}: {
+  frontImage: CardMedia | null;
+  backImage: CardMedia | null;
+  selectedSide: "front" | "back";
+  busy: boolean;
+  onSelectSide: (side: "front" | "back") => void;
+  onSave: (sourceMediaId: number, payload: Parameters<typeof api.createDerivedMedia>[1]) => Promise<void>;
+}) {
+  const source = selectedSide === "front" ? frontImage ?? backImage : backImage ?? frontImage;
+  const sourceSide = sideFromLabel(source?.label) ?? selectedSide;
+  const [adjustments, setAdjustments] = useState<ImageAdjustments>(defaultAdjustments);
+  const [crop, setCrop] = useState<CropRectPct>(defaultCrop);
+  const [lockAspect, setLockAspect] = useState(false);
+  const [natural, setNatural] = useState({ width: 0, height: 0 });
+  const [drag, setDrag] = useState<{ handle: CropHandle; startX: number; startY: number; start: CropRectPct } | null>(null);
+  const editorRef = useRef<HTMLDivElement | null>(null);
+
+  useEffect(() => {
+    setNatural({ width: 0, height: 0 });
+    setCrop(defaultCrop);
+    setAdjustments(defaultAdjustments);
+  }, [source?.id]);
+
+  const updateAdjustment = (key: keyof ImageAdjustments, value: number) => {
+    setAdjustments((current) => ({ ...current, [key]: value }));
+  };
+
+  const pointerToPct = (event: PointerEvent<HTMLElement>) => {
+    const rect = editorRef.current?.getBoundingClientRect();
+    if (!rect) return { x: 0, y: 0 };
+    return {
+      x: clampPct(((event.clientX - rect.left) / rect.width) * 100),
+      y: clampPct(((event.clientY - rect.top) / rect.height) * 100),
+    };
+  };
+
+  const startCropDrag = (event: PointerEvent<HTMLElement>, handle: CropHandle) => {
+    event.preventDefault();
+    event.stopPropagation();
+    const point = pointerToPct(event);
+    setDrag({ handle, startX: point.x, startY: point.y, start: crop });
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const updateCropDrag = (event: PointerEvent<HTMLElement>) => {
+    if (!drag) return;
+    const point = pointerToPct(event);
+    const dx = point.x - drag.startX;
+    const dy = point.y - drag.startY;
+    const next = { ...drag.start };
+
+    if (drag.handle === "move") {
+      next.x = clampPct(drag.start.x + dx, 0, 100 - drag.start.width);
+      next.y = clampPct(drag.start.y + dy, 0, 100 - drag.start.height);
+    } else {
+      const right = drag.start.x + drag.start.width;
+      const bottom = drag.start.y + drag.start.height;
+      if (drag.handle.includes("w")) {
+        next.x = clampPct(drag.start.x + dx, 0, right - 5);
+        next.width = right - next.x;
+      }
+      if (drag.handle.includes("e")) {
+        next.width = clampPct(drag.start.width + dx, 5, 100 - drag.start.x);
+      }
+      if (drag.handle.includes("n")) {
+        next.y = clampPct(drag.start.y + dy, 0, bottom - 5);
+        next.height = bottom - next.y;
+      }
+      if (drag.handle.includes("s")) {
+        next.height = clampPct(drag.start.height + dy, 5, 100 - drag.start.y);
+      }
+      if (lockAspect) {
+        const aspect = drag.start.width / Math.max(1, drag.start.height);
+        if (drag.handle.includes("e") || drag.handle.includes("w")) {
+          next.height = clampPct(next.width / aspect, 5, 100 - next.y);
+          if (drag.handle.includes("n")) next.y = bottom - next.height;
+        } else {
+          next.width = clampPct(next.height * aspect, 5, 100 - next.x);
+          if (drag.handle.includes("w")) next.x = right - next.width;
+        }
+      }
+    }
+    setCrop(next);
+  };
+
+  const setPreset = (preset: "full" | "close" | "square") => {
+    if (preset === "full") {
+      setCrop({ x: 3, y: 3, width: 94, height: 94 });
+      return;
+    }
+    if (preset === "close") {
+      setCrop({ x: 12, y: 10, width: 76, height: 80 });
+      return;
+    }
+    const width = natural.width || 1;
+    const height = natural.height || 1;
+    const sizePx = Math.min(width, height) * 0.86;
+    setCrop({
+      x: ((width - sizePx) / 2 / width) * 100,
+      y: ((height - sizePx) / 2 / height) * 100,
+      width: (sizePx / width) * 100,
+      height: (sizePx / height) * 100,
+    });
+  };
+
+  const saveAdjustments = () => {
+    if (!source) return;
+    onSave(source.id, {
+      label: `${sourceSide}_adjusted`,
+      edit_type: "manual_adjustment",
+      ...adjustments,
+      edit_metadata: { source_label: source.label },
+    });
+  };
+
+  const saveCrop = () => {
+    if (!source || natural.width <= 0 || natural.height <= 0) return;
+    onSave(source.id, {
+      label: `${sourceSide}_crop_manual`,
+      edit_type: "manual_crop",
+      ...adjustments,
+      ...cropToPixels(crop, natural),
+      edit_metadata: { source_label: source.label, crop_pct: crop, aspect_ratio_locked: lockAspect },
+    });
+  };
+
+  return (
+    <details className="rounded-xl border border-slate-800 bg-charcoal-850/95 shadow-panel">
+      <summary className="cursor-pointer border-b border-slate-800 bg-slate-950/20 px-5 py-4 text-sm font-semibold text-slate-50">
+        Kép szerkesztés
+      </summary>
+      <div className="space-y-4 p-5">
+        {!source ? (
+          <EmptyState label="Tölts fel front vagy back képet a képszerkesztéshez." />
+        ) : (
+          <>
+            <div className="grid grid-cols-2 gap-2 rounded-lg border border-slate-800 bg-slate-950/35 p-1">
+              <button className={`rounded-md px-3 py-2 text-sm font-medium ${selectedSide === "front" ? "bg-blue-600 text-white" : "text-slate-300 hover:bg-slate-800/70"} disabled:opacity-45`} disabled={!frontImage} onClick={() => onSelectSide("front")} type="button">
+                Front
+              </button>
+              <button className={`rounded-md px-3 py-2 text-sm font-medium ${selectedSide === "back" ? "bg-blue-600 text-white" : "text-slate-300 hover:bg-slate-800/70"} disabled:opacity-45`} disabled={!backImage} onClick={() => onSelectSide("back")} type="button">
+                Back
+              </button>
+            </div>
+
+            <div
+              ref={editorRef}
+              className="relative overflow-hidden rounded-lg border border-slate-800 bg-slate-950"
+              onPointerMove={updateCropDrag}
+              onPointerUp={() => setDrag(null)}
+              onPointerLeave={() => setDrag(null)}
+            >
+              <img
+                alt={source.label}
+                className="block aspect-[3/4] w-full object-contain"
+                draggable={false}
+                onLoad={(event) => setNatural({ width: event.currentTarget.naturalWidth, height: event.currentTarget.naturalHeight })}
+                src={mediaUrl(source.file_path, cacheKeyFor(source))}
+                style={{
+                  filter: imageFilter(adjustments),
+                  transform: `rotate(${adjustments.rotate_degrees}deg)`,
+                  transition: drag ? "none" : "filter 120ms ease, transform 120ms ease",
+                }}
+              />
+              <div className="absolute inset-0 bg-black/20" />
+              <div
+                className="absolute border-2 border-emerald-300 bg-emerald-300/10 shadow-[0_0_18px_rgba(110,231,183,0.35)]"
+                style={{ left: `${crop.x}%`, top: `${crop.y}%`, width: `${crop.width}%`, height: `${crop.height}%` }}
+              >
+                <button aria-label="Crop move" className="absolute inset-0 cursor-move" onPointerDown={(event) => startCropDrag(event, "move")} type="button" />
+                {(["nw", "ne", "sw", "se", "n", "s", "e", "w"] as CropHandle[]).map((handle) => {
+                  const positionClass = {
+                    nw: "-left-2 -top-2 cursor-nwse-resize",
+                    ne: "-right-2 -top-2 cursor-nesw-resize",
+                    sw: "-bottom-2 -left-2 cursor-nesw-resize",
+                    se: "-bottom-2 -right-2 cursor-nwse-resize",
+                    n: "-top-2 left-1/2 -translate-x-1/2 cursor-ns-resize",
+                    s: "-bottom-2 left-1/2 -translate-x-1/2 cursor-ns-resize",
+                    e: "-right-2 top-1/2 -translate-y-1/2 cursor-ew-resize",
+                    w: "-left-2 top-1/2 -translate-y-1/2 cursor-ew-resize",
+                    move: "",
+                  }[handle];
+                  return (
+                    <button
+                      key={handle}
+                      aria-label={`Crop ${handle}`}
+                      className={`absolute h-4 w-4 rounded-full border border-emerald-100 bg-emerald-400 shadow-[0_0_12px_rgba(52,211,153,0.8)] transition hover:scale-125 ${positionClass}`}
+                      onPointerDown={(event) => startCropDrag(event, handle)}
+                      type="button"
+                    />
+                  );
+                })}
+              </div>
+            </div>
+
+            <div className="grid gap-3">
+              <AdjustmentSlider label="Brightness" min={0.5} max={1.6} step={0.01} value={adjustments.brightness} onChange={(value) => updateAdjustment("brightness", value)} />
+              <AdjustmentSlider label="Contrast" min={0.5} max={1.8} step={0.01} value={adjustments.contrast} onChange={(value) => updateAdjustment("contrast", value)} />
+              <AdjustmentSlider label="Saturation" min={0} max={1.8} step={0.01} value={adjustments.saturation} onChange={(value) => updateAdjustment("saturation", value)} />
+              <AdjustmentSlider label="Sharpness" min={0} max={2.5} step={0.05} value={adjustments.sharpness} onChange={(value) => updateAdjustment("sharpness", value)} />
+              <AdjustmentSlider label="Gamma" min={0.5} max={1.8} step={0.01} value={adjustments.gamma} onChange={(value) => updateAdjustment("gamma", value)} />
+              <AdjustmentSlider label="Exposure" min={-1.5} max={1.5} step={0.05} value={adjustments.exposure} onChange={(value) => updateAdjustment("exposure", value)} />
+              <AdjustmentSlider label="Rotate" min={-180} max={180} step={1} value={adjustments.rotate_degrees} onChange={(value) => updateAdjustment("rotate_degrees", value)} />
+            </div>
+
+            <div className="grid grid-cols-3 gap-2">
+              <button className="rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300 hover:bg-slate-800" onClick={() => setPreset("full")} type="button">Full card</button>
+              <button className="rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300 hover:bg-slate-800" onClick={() => setPreset("close")} type="button">Close-up</button>
+              <button className="rounded-lg border border-slate-700 px-3 py-2 text-xs text-slate-300 hover:bg-slate-800" onClick={() => setPreset("square")} type="button">Square</button>
+            </div>
+            <label className="flex items-center gap-2 rounded-lg border border-slate-800 bg-slate-950/35 px-3 py-2 text-sm text-slate-300">
+              <input checked={lockAspect} className="accent-blue-500" onChange={(event) => setLockAspect(event.target.checked)} type="checkbox" />
+              Aspect ratio lock
+            </label>
+
+            <div className="grid gap-2 sm:grid-cols-2">
+              <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-sm font-medium text-slate-300 hover:bg-slate-800 disabled:opacity-60" disabled={busy} onClick={() => { setAdjustments(defaultAdjustments); setCrop(defaultCrop); }} type="button">
+                <RotateCcw size={16} /> Reset
+              </button>
+              <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-500/40 px-3 py-2 text-sm font-medium text-blue-100 hover:bg-blue-500/10 disabled:opacity-60" disabled={busy} onClick={saveAdjustments} type="button">
+                <Save size={16} /> Save adjusted
+              </button>
+              <button className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60 sm:col-span-2" disabled={busy || natural.width <= 0} onClick={saveCrop} type="button">
+                <Crop size={16} /> Save crop as derived image
+              </button>
+            </div>
+          </>
+        )}
+      </div>
+    </details>
+  );
 }
 
 function ReportList({ title, items }: { title: string; items: string[] }) {
@@ -1147,6 +1543,7 @@ type CenteringLines = {
   inner_bottom_px: number;
 };
 type LineKey = keyof CenteringLines;
+type PercentLines = Record<LineKey, number>;
 
 function defaultLines(width: number, height: number): CenteringLines {
   return {
@@ -1161,17 +1558,74 @@ function defaultLines(width: number, height: number): CenteringLines {
   };
 }
 
-function linesFromMeasurement(measurement: CenteringMeasurement | null, width: number, height: number): CenteringLines {
-  if (!measurement || measurement.image_width !== width || measurement.image_height !== height) return defaultLines(width, height);
+function linesToPercent(lines: CenteringLines, width: number, height: number): PercentLines {
   return {
-    outer_left_px: measurement.outer_left_px,
-    outer_right_px: measurement.outer_right_px,
-    outer_top_px: measurement.outer_top_px,
-    outer_bottom_px: measurement.outer_bottom_px,
-    inner_left_px: measurement.inner_left_px,
-    inner_right_px: measurement.inner_right_px,
-    inner_top_px: measurement.inner_top_px,
-    inner_bottom_px: measurement.inner_bottom_px,
+    outer_left_px: lines.outer_left_px / Math.max(1, width),
+    outer_right_px: lines.outer_right_px / Math.max(1, width),
+    outer_top_px: lines.outer_top_px / Math.max(1, height),
+    outer_bottom_px: lines.outer_bottom_px / Math.max(1, height),
+    inner_left_px: lines.inner_left_px / Math.max(1, width),
+    inner_right_px: lines.inner_right_px / Math.max(1, width),
+    inner_top_px: lines.inner_top_px / Math.max(1, height),
+    inner_bottom_px: lines.inner_bottom_px / Math.max(1, height),
+  };
+}
+
+function linesFromPercent(percent: PercentLines, width: number, height: number): CenteringLines {
+  return {
+    outer_left_px: percent.outer_left_px * width,
+    outer_right_px: percent.outer_right_px * width,
+    outer_top_px: percent.outer_top_px * height,
+    outer_bottom_px: percent.outer_bottom_px * height,
+    inner_left_px: percent.inner_left_px * width,
+    inner_right_px: percent.inner_right_px * width,
+    inner_top_px: percent.inner_top_px * height,
+    inner_bottom_px: percent.inner_bottom_px * height,
+  };
+}
+
+function percentFromMeasurement(measurement: CenteringMeasurement): PercentLines {
+  return {
+    outer_left_px: (measurement.outer_left_pct ?? (measurement.outer_left_px / Math.max(1, measurement.image_width))) / (measurement.outer_left_pct ? 100 : 1),
+    outer_right_px: (measurement.outer_right_pct ?? (measurement.outer_right_px / Math.max(1, measurement.image_width))) / (measurement.outer_right_pct ? 100 : 1),
+    outer_top_px: (measurement.outer_top_pct ?? (measurement.outer_top_px / Math.max(1, measurement.image_height))) / (measurement.outer_top_pct ? 100 : 1),
+    outer_bottom_px: (measurement.outer_bottom_pct ?? (measurement.outer_bottom_px / Math.max(1, measurement.image_height))) / (measurement.outer_bottom_pct ? 100 : 1),
+    inner_left_px: (measurement.inner_left_pct ?? (measurement.inner_left_px / Math.max(1, measurement.image_width))) / (measurement.inner_left_pct ? 100 : 1),
+    inner_right_px: (measurement.inner_right_pct ?? (measurement.inner_right_px / Math.max(1, measurement.image_width))) / (measurement.inner_right_pct ? 100 : 1),
+    inner_top_px: (measurement.inner_top_pct ?? (measurement.inner_top_px / Math.max(1, measurement.image_height))) / (measurement.inner_top_pct ? 100 : 1),
+    inner_bottom_px: (measurement.inner_bottom_pct ?? (measurement.inner_bottom_px / Math.max(1, measurement.image_height))) / (measurement.inner_bottom_pct ? 100 : 1),
+  };
+}
+
+function linesFromMeasurement(measurement: CenteringMeasurement | null, width: number, height: number): CenteringLines {
+  if (!measurement) return defaultLines(width, height);
+  if (measurement.image_width === width && measurement.image_height === height) {
+    return {
+      outer_left_px: measurement.outer_left_px,
+      outer_right_px: measurement.outer_right_px,
+      outer_top_px: measurement.outer_top_px,
+      outer_bottom_px: measurement.outer_bottom_px,
+      inner_left_px: measurement.inner_left_px,
+      inner_right_px: measurement.inner_right_px,
+      inner_top_px: measurement.inner_top_px,
+      inner_bottom_px: measurement.inner_bottom_px,
+    };
+  }
+  return linesFromPercent(percentFromMeasurement(measurement), width, height);
+}
+
+function normalizeLinePayload(lines: CenteringLines, width: number, height: number) {
+  const percent = linesToPercent(lines, width, height);
+  return {
+    ...lines,
+    outer_left_pct: percent.outer_left_px * 100,
+    outer_right_pct: percent.outer_right_px * 100,
+    outer_top_pct: percent.outer_top_px * 100,
+    outer_bottom_pct: percent.outer_bottom_px * 100,
+    inner_left_pct: percent.inner_left_px * 100,
+    inner_right_pct: percent.inner_right_px * 100,
+    inner_top_pct: percent.inner_top_px * 100,
+    inner_bottom_pct: percent.inner_bottom_px * 100,
   };
 }
 
@@ -1191,20 +1645,54 @@ function liveCentering(lines: CenteringLines) {
   const limiter = Math.max(horizontal.first, horizontal.second, vertical.first, vertical.second);
   const grade = limiter <= 55 ? "Gem Mint 10" : limiter <= 60 ? "Mint 9" : limiter <= 65 ? "NM-MT 8.5" : limiter <= 70 ? "NM-MT 8" : limiter <= 75 ? "EX-MT 7.5" : "Below 7";
   const score = limiter <= 55 ? 10 : limiter <= 60 ? 9 : limiter <= 65 ? 8.5 : limiter <= 70 ? 8 : limiter <= 75 ? 7.5 : Math.max(1, 7 - ((limiter - 75) / 5));
-  const shiftX = horizontal.first > horizontal.second ? "shifted right" : horizontal.second > horizontal.first ? "shifted left" : "balanced";
-  const shiftY = vertical.first > vertical.second ? "shifted down" : vertical.second > vertical.first ? "shifted up" : "balanced";
+  const shiftX = horizontal.first > horizontal.second ? "jobbra tolódik" : horizontal.second > horizontal.first ? "balra tolódik" : "középen";
+  const shiftY = vertical.first > vertical.second ? "lefelé tolódik" : vertical.second > vertical.first ? "felfelé tolódik" : "középen";
   return { horizontal, vertical, grade, score: Math.round(score * 10) / 10, shiftX, shiftY };
+}
+
+function CenteringRatioBar({ label, first, second }: { label: string; first: number; second: number }) {
+  return (
+    <div>
+      <div className="mb-1 flex items-center justify-between text-xs text-cyan-100">
+        <span>{label}</span>
+        <span>{Math.round(first)}/{Math.round(second)}</span>
+      </div>
+      <div className="flex h-2 overflow-hidden rounded-full bg-slate-950">
+        <div className="bg-cyan-300" style={{ width: `${first}%` }} />
+        <div className="bg-blue-500" style={{ width: `${second}%` }} />
+      </div>
+    </div>
+  );
+}
+
+function CenteringResultCard({ side, result }: { side: "front" | "back"; result: ReturnType<typeof liveCentering> }) {
+  return (
+    <div className="rounded-lg border border-cyan-500/25 bg-cyan-500/10 p-4 text-sm text-cyan-100">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold uppercase tracking-wide text-cyan-200">{side}</div>
+          <div className="mt-1 text-base font-semibold">{result.grade}</div>
+        </div>
+        <div className="rounded-full border border-cyan-300/30 bg-cyan-300/10 px-3 py-1 text-xs">Score {formatNumber(result.score)}</div>
+      </div>
+      <div className="mt-4 space-y-3">
+        <CenteringRatioBar label="L/R" first={result.horizontal.first} second={result.horizontal.second} />
+        <CenteringRatioBar label="T/B" first={result.vertical.first} second={result.vertical.second} />
+      </div>
+      <div className="mt-3 text-xs text-cyan-200">{result.shiftX} · {result.shiftY}</div>
+    </div>
+  );
 }
 
 function CenteringEditor({
   sources,
-  latest,
+  measurements,
   busy,
   onCancel,
   onSave,
 }: {
   sources: { front: CenteringSource | null; back: CenteringSource | null };
-  latest: CenteringMeasurement | null;
+  measurements: CenteringMeasurement[];
   busy: boolean;
   onCancel: () => void;
   onSave: (payload: Partial<CenteringMeasurement>) => void;
@@ -1212,18 +1700,56 @@ function CenteringEditor({
   const [side, setSide] = useState<"front" | "back">(sources.front ? "front" : "back");
   const [natural, setNatural] = useState({ width: 0, height: 0 });
   const [lines, setLines] = useState<CenteringLines | null>(null);
+  const [lineTemplates, setLineTemplates] = useState<Partial<Record<"front" | "back", PercentLines>>>({});
   const [dragging, setDragging] = useState<LineKey | null>(null);
+  const [hoverLine, setHoverLine] = useState<LineKey | null>(null);
+  const [zoom, setZoom] = useState(1);
+  const [pan, setPan] = useState({ x: 0, y: 0 });
+  const [spaceDown, setSpaceDown] = useState(false);
+  const [panning, setPanning] = useState<{ x: number; y: number; pan: { x: number; y: number } } | null>(null);
   const source = sources[side] ?? sources.front ?? sources.back;
   const result = lines ? liveCentering(lines) : null;
+  const savedMeasurement = measurements.find((measurement) => measurement.side === side) ?? null;
+  const otherSide = side === "front" ? "back" : "front";
 
   useEffect(() => {
     setLines(null);
     setNatural({ width: 0, height: 0 });
+    setZoom(1);
+    setPan({ x: 0, y: 0 });
   }, [side, source?.file_path]);
+
+  useEffect(() => {
+    const keyDown = (event: KeyboardEvent) => {
+      if (event.code === "Space") {
+        setSpaceDown(true);
+      }
+    };
+    const keyUp = (event: KeyboardEvent) => {
+      if (event.code === "Space") {
+        setSpaceDown(false);
+        setPanning(null);
+      }
+    };
+    window.addEventListener("keydown", keyDown);
+    window.addEventListener("keyup", keyUp);
+    return () => {
+      window.removeEventListener("keydown", keyDown);
+      window.removeEventListener("keyup", keyUp);
+    };
+  }, []);
 
   const initializeLines = (width: number, height: number) => {
     setNatural({ width, height });
-    setLines(linesFromMeasurement(latest?.side === side ? latest : null, width, height));
+    const template = lineTemplates[side];
+    setLines(template ? linesFromPercent(template, width, height) : linesFromMeasurement(savedMeasurement, width, height));
+  };
+
+  const setCurrentLines = (nextLines: CenteringLines) => {
+    setLines(nextLines);
+    if (natural.width > 0 && natural.height > 0) {
+      setLineTemplates((current) => ({ ...current, [side]: linesToPercent(nextLines, natural.width, natural.height) }));
+    }
   };
 
   const updateLine = (event: PointerEvent<SVGSVGElement>) => {
@@ -1231,15 +1757,39 @@ function CenteringEditor({
     const rect = event.currentTarget.getBoundingClientRect();
     const x = ((event.clientX - rect.left) / rect.width) * natural.width;
     const y = ((event.clientY - rect.top) / rect.height) * natural.height;
-    setLines((current) => {
-      if (!current) return current;
-      const next = { ...current };
-      if (dragging.includes("left") || dragging.includes("right")) {
-        next[dragging] = Math.max(0, Math.min(natural.width, x));
-      } else {
-        next[dragging] = Math.max(0, Math.min(natural.height, y));
-      }
-      return next;
+    const next = { ...lines };
+    if (dragging.includes("left") || dragging.includes("right")) {
+      next[dragging] = Math.max(0, Math.min(natural.width, x));
+    } else {
+      next[dragging] = Math.max(0, Math.min(natural.height, y));
+    }
+    setCurrentLines(next);
+  };
+
+  const startGuideDrag = (event: PointerEvent<SVGElement>, key: LineKey) => {
+    event.preventDefault();
+    event.stopPropagation();
+    setDragging(key);
+  };
+
+  const handleWheel = (event: WheelEvent<HTMLDivElement>) => {
+    event.preventDefault();
+    const next = Math.max(0.5, Math.min(4, zoom + (event.deltaY < 0 ? 0.12 : -0.12)));
+    setZoom(next);
+  };
+
+  const startPan = (event: PointerEvent<HTMLDivElement>) => {
+    if (event.button !== 1 && !spaceDown) return;
+    event.preventDefault();
+    setPanning({ x: event.clientX, y: event.clientY, pan });
+    event.currentTarget.setPointerCapture(event.pointerId);
+  };
+
+  const updatePan = (event: PointerEvent<HTMLDivElement>) => {
+    if (!panning) return;
+    setPan({
+      x: panning.pan.x + event.clientX - panning.x,
+      y: panning.pan.y + event.clientY - panning.y,
     });
   };
 
@@ -1252,22 +1802,88 @@ function CenteringEditor({
       image_width: natural.width,
       image_height: natural.height,
       media_id: "owned_card_id" in source ? source.id : null,
-      ...lines,
+      ...normalizeLinePayload(lines, natural.width, natural.height),
     });
   };
 
-  const lineClass = (key: LineKey) => key.startsWith("outer") ? "stroke-rose-500" : "stroke-sky-400";
-  const lineWidth = 3;
+  const resetLines = () => {
+    if (!natural.width || !natural.height) return;
+    setCurrentLines(defaultLines(natural.width, natural.height));
+  };
+
+  const copyLinesToOtherSide = () => {
+    if (!lines || !natural.width || !natural.height) return;
+    setLineTemplates((current) => ({ ...current, [otherSide]: linesToPercent(lines, natural.width, natural.height) }));
+  };
+
+  const guideColor = (key: LineKey) => key.startsWith("outer") ? "#f43f5e" : "#38bdf8";
+  const guideFill = (key: LineKey) => key.startsWith("outer") ? "#fb7185" : "#7dd3fc";
+  const isVertical = (key: LineKey) => key.includes("left") || key.includes("right");
+  const guideCursor = (key: LineKey) => isVertical(key) ? "cursor-ew-resize" : "cursor-ns-resize";
   const scaleX = (value: number) => `${(value / Math.max(1, natural.width)) * 100}%`;
   const scaleY = (value: number) => `${(value / Math.max(1, natural.height)) * 100}%`;
+  const drawGuide = (key: LineKey) => {
+    if (!lines) return null;
+    const active = dragging === key || hoverLine === key;
+    const vertical = isVertical(key);
+    const value = lines[key];
+    const lineProps = vertical
+      ? { x1: value, x2: value, y1: 0, y2: natural.height }
+      : { x1: 0, x2: natural.width, y1: value, y2: value };
+    const cx = vertical ? value : natural.width / 2;
+    const cy = vertical ? natural.height / 2 : value;
+    return (
+      <g key={key}>
+        <line {...lineProps} stroke="black" strokeOpacity={0.75} strokeWidth={active ? 8 : 6} />
+        <line {...lineProps} stroke={guideColor(key)} strokeWidth={active ? 4 : 3} />
+        <line
+          {...lineProps}
+          className={guideCursor(key)}
+          data-guide-handle
+          onPointerDown={(event) => startGuideDrag(event, key)}
+          onPointerEnter={() => setHoverLine(key)}
+          onPointerLeave={() => setHoverLine(null)}
+          stroke="transparent"
+          strokeWidth={28}
+        />
+        <circle cx={cx} cy={cy} r={active ? 14 : 11} fill="black" fillOpacity={0.75} />
+        <circle
+          className={`${guideCursor(key)} transition`}
+          cx={cx}
+          cy={cy}
+          data-guide-handle
+          fill={guideFill(key)}
+          onPointerDown={(event) => startGuideDrag(event, key)}
+          onPointerEnter={() => setHoverLine(key)}
+          onPointerLeave={() => setHoverLine(null)}
+          r={active ? 11 : 8}
+          stroke="white"
+          strokeOpacity={0.8}
+          strokeWidth={2}
+          style={{ filter: `drop-shadow(0 0 8px ${guideColor(key)})` }}
+        />
+        <circle
+          className={guideCursor(key)}
+          cx={cx}
+          cy={cy}
+          data-guide-handle
+          fill="transparent"
+          onPointerDown={(event) => startGuideDrag(event, key)}
+          onPointerEnter={() => setHoverLine(key)}
+          onPointerLeave={() => setHoverLine(null)}
+          r={24}
+        />
+      </g>
+    );
+  };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4">
-      <div className="max-h-[94vh] w-full max-w-6xl overflow-auto rounded-xl border border-slate-700 bg-charcoal-900 p-4">
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+      <div className="max-h-[94vh] w-full max-w-7xl overflow-auto rounded-xl border border-slate-700 bg-charcoal-900/95 p-4 shadow-2xl shadow-black/50">
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-lg font-semibold text-slate-100">Centering beállítása</h2>
-            <p className="mt-1 text-sm text-slate-400">Piros: külső kártyaszél. Kék: belső artwork/border határ.</p>
+            <p className="mt-1 text-sm text-slate-400">Piros: külső kártyaszél. Kék: belső artwork/border határ. Görgővel zoom, Space + drag vagy középső egérgomb: pan.</p>
           </div>
           <div className="flex gap-2">
             <button className={`rounded-lg px-3 py-2 text-sm ${side === "front" ? "bg-blue-600 text-white" : "border border-slate-700 text-slate-300"}`} disabled={!sources.front} onClick={() => setSide("front")} type="button">Front</button>
@@ -1278,9 +1894,18 @@ function CenteringEditor({
         {!source ? (
           <EmptyState label="Nincs használható front/back kép a centering szerkesztőhöz." />
         ) : (
-          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
-            <div className="flex justify-center overflow-hidden rounded-lg border border-slate-800 bg-slate-950">
-              <div className="relative inline-block max-h-[72vh] max-w-full">
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_360px]">
+            <div
+              className={`relative flex h-[72vh] items-center justify-center overflow-hidden rounded-lg border border-slate-800 bg-slate-950 ${spaceDown || panning ? "cursor-grab" : ""}`}
+              onPointerDown={startPan}
+              onPointerMove={updatePan}
+              onPointerUp={() => { setPanning(null); setDragging(null); }}
+              onWheel={handleWheel}
+            >
+              <div
+                className="relative inline-block max-h-full max-w-full transition-transform duration-100"
+                style={{ transform: `translate(${pan.x}px, ${pan.y}px) scale(${zoom})`, transformOrigin: "center" }}
+              >
                 <img
                   className="block max-h-[72vh] w-auto max-w-full select-none"
                   src={mediaUrl(source.file_path, cacheKeyFor(source))}
@@ -1288,42 +1913,33 @@ function CenteringEditor({
                   onLoad={(event) => initializeLines(event.currentTarget.naturalWidth, event.currentTarget.naturalHeight)}
                   draggable={false}
                 />
-                {lines && natural.width > 0 && (
+                {lines && natural.width > 0 && natural.height > 0 && (
                   <svg
                     className="absolute inset-0 h-full w-full touch-none"
                     onPointerMove={updateLine}
-                    onPointerUp={() => setDragging(null)}
-                    onPointerLeave={() => setDragging(null)}
+                    onPointerUp={() => { setDragging(null); setHoverLine(null); }}
+                    onPointerLeave={() => { setDragging(null); setHoverLine(null); }}
                     viewBox={`0 0 ${natural.width} ${natural.height}`}
                     preserveAspectRatio="none"
                   >
-                    {(["outer_left_px", "outer_right_px", "inner_left_px", "inner_right_px"] as LineKey[]).map((key) => (
-                      <line key={key} x1={lines[key]} x2={lines[key]} y1={0} y2={natural.height} className={`${lineClass(key)} cursor-ew-resize`} strokeWidth={lineWidth} onPointerDown={() => setDragging(key)} />
-                    ))}
-                    {(["outer_top_px", "outer_bottom_px", "inner_top_px", "inner_bottom_px"] as LineKey[]).map((key) => (
-                      <line key={key} x1={0} x2={natural.width} y1={lines[key]} y2={lines[key]} className={`${lineClass(key)} cursor-ns-resize`} strokeWidth={lineWidth} onPointerDown={() => setDragging(key)} />
-                    ))}
+                    {(["outer_left_px", "outer_right_px", "outer_top_px", "outer_bottom_px", "inner_left_px", "inner_right_px", "inner_top_px", "inner_bottom_px"] as LineKey[]).map(drawGuide)}
                   </svg>
                 )}
+              </div>
+              <div className="absolute bottom-3 left-3 rounded-lg border border-slate-700 bg-slate-950/80 px-3 py-2 text-xs text-slate-300">
+                Zoom {formatNumber(zoom, 2)}x
               </div>
             </div>
 
             <div className="space-y-3">
-              {result && (
-                <div className="rounded-lg border border-cyan-500/25 bg-cyan-500/10 p-4 text-sm text-cyan-100">
-                  <div className="text-base font-semibold">{result.grade}</div>
-                  <div className="mt-2">L/R: {result.horizontal.label}</div>
-                  <div>T/B: {result.vertical.label}</div>
-                  <div>Score: {formatNumber(result.score)}</div>
-                  <div className="mt-2 text-cyan-200">{result.shiftX} · {result.shiftY}</div>
-                </div>
-              )}
+              {result && <CenteringResultCard side={side} result={result} />}
               <div className="grid grid-cols-2 gap-2">
-                <button className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800" onClick={() => natural.width && setLines(defaultLines(natural.width, natural.height))} type="button">Reset lines</button>
-                <button className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800" onClick={() => natural.width && setLines(defaultLines(natural.width, natural.height))} type="button">Auto place lines</button>
+                <button className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800" onClick={resetLines} type="button">Reset lines</button>
+                <button className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800" onClick={() => { setZoom(1); setPan({ x: 0, y: 0 }); }} type="button">Reset zoom</button>
+                <button className="rounded-lg border border-cyan-500/40 px-3 py-2 text-sm text-cyan-100 hover:bg-cyan-500/10 disabled:opacity-50" disabled={!sources[otherSide] || !lines} onClick={copyLinesToOtherSide} type="button">Copy to {otherSide}</button>
                 <button className="rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60" disabled={busy || !lines} onClick={save} type="button">Save measurement</button>
-                <button className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800" onClick={onCancel} type="button">Cancel</button>
               </div>
+              <button className="w-full rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800" onClick={onCancel} type="button">Cancel</button>
               <div className="rounded-lg border border-slate-800 bg-slate-950/35 p-4 text-xs leading-6 text-slate-300">
                 <div className="mb-2 font-semibold text-slate-100">Centering reference</div>
                 <div>Gem Mint 10: 55/45 or better</div>
@@ -1339,6 +1955,12 @@ function CenteringEditor({
                   Y: outer {scaleY(lines.outer_top_px)} / {scaleY(lines.outer_bottom_px)} · inner {scaleY(lines.inner_top_px)} / {scaleY(lines.inner_bottom_px)}
                 </div>
               )}
+              <details className="rounded-lg border border-slate-800 bg-slate-950/25 p-3">
+                <summary className="cursor-pointer text-sm font-medium text-slate-300">Másodlagos eszközök</summary>
+                <div className="mt-3 text-xs leading-6 text-slate-400">
+                  Reset lines csak a modalban állítja vissza az automatikus alaphelyzetet. A mentett mérés addig nem változik, amíg nem nyomsz Save measurement gombot.
+                </div>
+              </details>
             </div>
           </div>
         )}

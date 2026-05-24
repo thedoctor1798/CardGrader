@@ -134,6 +134,7 @@ To add another copy of an existing card:
 After creating a card you can:
 
 - Upload front/back images from the card detail page.
+- Optionally prepare the photo in `Kép szerkesztés`.
 - Add manual prices in the price panel.
 - Run OpenCV analysis.
 - Set manual centering with `Centering beállítása` if you want centering ratios to override the automatic MVP estimate.
@@ -156,6 +157,14 @@ Developer and troubleshooting actions such as Local AI dry-run, single-image deb
 Long-running local work such as OpenCV analysis, Local AI analysis, report refresh, centering save, media upload, and snapshot creation shows a centered blurred loading overlay. These states are local-only; there are no external API calls, cloud calls, or API keys.
 
 Missing latest price is normal for cards where no manual price has been recorded yet. The UI shows `Még nincs ár` / `Még nincs ár rögzítve.` and the manual price form remains usable.
+
+Normal grading preparation flow:
+
+```text
+Upload -> optional image editing -> optional manual crop -> Centering setup -> OpenCV analysis -> Local AI analysis -> Report
+```
+
+Image editing is non-destructive. Original uploads remain under `media/originals`; saved edits and manual crops are stored as new derived media records under `media/derived`.
 
 ## Media Upload Test
 
@@ -195,9 +204,15 @@ The card detail page includes `Centering beállítása`.
 
 - Red guide lines mark the outer card edges.
 - Blue guide lines mark the inner artwork/border boundaries.
-- Drag the guide lines visually until they match the card.
+- Drag the guide lines or their circular handles until they match the card.
+- Mouse wheel zooms. Hold Space and drag, or use middle mouse drag, to pan.
+- Front and back have separate persistent measurements.
+- Save, close, reopen, and page refresh restore the latest saved guide positions for each side.
+- Reset lines only changes the current editor draft until `Save measurement` is pressed.
+- `Copy to front/back` copies current line percentages to the other side as an unsaved helper.
 - The editor calculates L/R and T/B ratios live, for example `54/46` and `58/42`.
-- Saved manual centering measurements are stored locally and override the automatic OpenCV centering estimate in scoring/reporting.
+- Saved manual centering measurements are stored locally with raw pixel coordinates and normalized line percentages for future grading logic.
+- Manual centering overrides the automatic OpenCV centering estimate in scoring/reporting.
 
 Normalized or tightly cropped card images are best for accuracy, but the editor falls back to the resized front/back image when normalized images are unavailable.
 
@@ -209,6 +224,25 @@ Centering reference:
 - NM-MT 8: 70/30 or better
 - EX-MT 7.5: 75/25 or better
 - Below 7: worse than 75/25
+
+## Image Editing And Derived Media
+
+Use `Kép szerkesztés` on Card Detail before analysis when the uploaded photo needs preparation.
+
+Available local tools:
+
+- brightness
+- contrast
+- saturation
+- sharpness
+- gamma
+- exposure
+- rotation
+- manual crop rectangle with draggable corners/edges
+- optional crop aspect-ratio lock
+- crop presets: full card, close-up, square
+
+Saving creates a new derived media record, for example `front_adjusted`, `front_crop_manual`, or `back_adjusted`. The original upload is preserved. OpenCV treats the newest `front*` and `back*` image records as the current analysis input, then still emits canonical `front_resized` and `back_resized` assets for Local AI.
 
 ## Local AI Setup
 

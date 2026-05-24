@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import Optional
+from typing import Any, Optional
 
 from sqlmodel import SQLModel
 
@@ -78,4 +78,24 @@ class CardMediaRead(SQLModel):
     width: Optional[int] = None
     height: Optional[int] = None
     file_size_bytes: Optional[int] = None
+    derived_from_media_id: Optional[int] = None
+    edit_type: Optional[str] = None
+    edit_metadata: Optional[str] = None
     created_at: datetime
+
+
+class DerivedMediaCreate(SQLModel):
+    label: Optional[str] = None
+    edit_type: str = "manual_adjustment"
+    brightness: float = 1.0
+    contrast: float = 1.0
+    saturation: float = 1.0
+    sharpness: float = 1.0
+    gamma: float = 1.0
+    exposure: float = 0.0
+    rotate_degrees: float = 0.0
+    crop_x: Optional[float] = None
+    crop_y: Optional[float] = None
+    crop_width: Optional[float] = None
+    crop_height: Optional[float] = None
+    edit_metadata: Optional[dict[str, Any]] = None

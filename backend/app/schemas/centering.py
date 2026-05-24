@@ -20,6 +20,14 @@ class CenteringMeasurementCreate(SQLModel):
     inner_right_px: float
     inner_top_px: float
     inner_bottom_px: float
+    outer_left_pct: Optional[float] = None
+    outer_right_pct: Optional[float] = None
+    outer_top_pct: Optional[float] = None
+    outer_bottom_pct: Optional[float] = None
+    inner_left_pct: Optional[float] = None
+    inner_right_pct: Optional[float] = None
+    inner_top_pct: Optional[float] = None
+    inner_bottom_pct: Optional[float] = None
     notes: Optional[str] = None
 
 

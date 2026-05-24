@@ -52,6 +52,9 @@ class CardMedia(SQLModel, table=True):
     width: Optional[int] = None
     height: Optional[int] = None
     file_size_bytes: Optional[int] = None
+    derived_from_media_id: Optional[int] = Field(default=None, foreign_key="card_media.id")
+    edit_type: Optional[str] = None
+    edit_metadata: Optional[str] = None
     created_at: datetime = Field(default_factory=utc_now)
 
 
@@ -178,6 +181,14 @@ class CenteringMeasurement(SQLModel, table=True):
     inner_right_px: float
     inner_top_px: float
     inner_bottom_px: float
+    outer_left_pct: Optional[float] = None
+    outer_right_pct: Optional[float] = None
+    outer_top_pct: Optional[float] = None
+    outer_bottom_pct: Optional[float] = None
+    inner_left_pct: Optional[float] = None
+    inner_right_pct: Optional[float] = None
+    inner_top_pct: Optional[float] = None
+    inner_bottom_pct: Optional[float] = None
     left_border_px: Optional[float] = None
     right_border_px: Optional[float] = None
     top_border_px: Optional[float] = None

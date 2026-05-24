@@ -6,6 +6,7 @@ def ensure_media_dirs():
     subfolders = [
         "originals",
         "resized",
+        "derived",
         "normalized",
         "crops",
         "annotated",

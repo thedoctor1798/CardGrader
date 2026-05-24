@@ -8,6 +8,7 @@ import type {
   Card,
   CardMedia,
   CenteringMeasurement,
+  DerivedMediaCreate,
   CleanupGeneratedMediaResponse,
   CollectionSnapshot,
   CollectionSummary,
@@ -93,6 +94,8 @@ export const api = {
     body.append("file", file);
     return request<CardMedia>(`/api/owned-cards/${ownedCardId}/media`, { method: "POST", body });
   },
+  createDerivedMedia: (mediaId: number, body: DerivedMediaCreate) =>
+    request<CardMedia>(`/api/media/${mediaId}/derive`, { method: "POST", body: JSON.stringify(body) }),
   getLatestOwnedCardPrice: (id: number) =>
     request<PriceObservation | null>(`/api/owned-cards/${id}/latest-price`, undefined, { notFoundAsNull: true }),
   createPrice: (cardId: number, body: Partial<PriceObservation>) =>
