@@ -8,6 +8,7 @@ from ..services.local_ai import (
     local_ai_config,
     local_ai_debug_single_image,
     local_ai_status,
+    run_remote_ai_grade,
     run_local_ai_aggregate,
     run_local_ai_fast,
     run_local_ai_full_review,
@@ -71,6 +72,14 @@ def analyze_owned_card_local_ai_full_review(
     session: Session = Depends(get_session),
 ):
     return run_local_ai_full_review(session, owned_card_id)
+
+
+@router.post("/owned-cards/{owned_card_id}/analyze/remote-ai-grade")
+def analyze_owned_card_remote_ai_grade(
+    owned_card_id: int,
+    session: Session = Depends(get_session),
+):
+    return run_remote_ai_grade(session, owned_card_id)
 
 
 @router.post("/owned-cards/{owned_card_id}/analyze/local-ai-dry-run")

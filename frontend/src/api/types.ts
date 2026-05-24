@@ -353,6 +353,39 @@ export type LocalAIAnalysisResponse = {
   status: string;
 };
 
+export type RemoteAIWorkerResult = {
+  estimated_grade?: number | string | null;
+  grade_range?: {
+    low?: number | string | null;
+    high?: number | string | null;
+  };
+  confidence?: string | null;
+  subscores?: {
+    centering?: number | string | null;
+    corners?: number | string | null;
+    edges?: number | string | null;
+    surface?: number | string | null;
+  };
+  detected_issues?: Array<{
+    area?: string | null;
+    severity?: string | null;
+    description?: string | null;
+  }>;
+  summary?: string | null;
+  psa_10_risk?: string | null;
+  recommended_action?: string | null;
+};
+
+export type RemoteAIGradeResponse = {
+  ok: boolean;
+  analysis_run?: AnalysisRun;
+  worker_result: RemoteAIWorkerResult | Record<string, unknown>;
+  worker_meta?: Record<string, unknown>;
+  finding_count?: number;
+  images_sent?: number;
+  image_labels_sent?: string[];
+};
+
 export type LocalAIDryRun = {
   config: LocalAIConfig;
   opencv_analysis_run_id: number;

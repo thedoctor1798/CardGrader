@@ -13,6 +13,7 @@ backend/.venv/
 !.env.example
 !.env.server.example
 !backend/.env.local.example
+!ai-worker/.env.example
 
 # Local database / data
 data/

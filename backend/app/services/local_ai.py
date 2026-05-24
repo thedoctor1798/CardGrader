@@ -13,6 +13,7 @@ from fastapi import HTTPException
 from sqlmodel import Session, select
 
 from ..config import (
+    AI_WORKER_SHARED_TOKEN,
     LOCAL_AI_BASE_URL,
     LOCAL_AI_DISABLE_THINKING,
     LOCAL_AI_ENABLED,
@@ -26,7 +27,7 @@ from ..config import (
     MEDIA_DIR,
     ROOT,
 )
-from ..models import AnalysisAsset, AnalysisFinding, AnalysisRun, Card, OwnedCard
+from ..models import AnalysisAsset, AnalysisFinding, AnalysisRun, Card, CenteringMeasurement, OwnedCard
 
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 LOCAL_AI_ANALYSIS_VERSION = "local_ai_fast_v1"
@@ -43,6 +44,42 @@ PASS_ASSET_PRIORITY = {
         "back_resized",
     ],
     "fast": ["front_resized", "back_resized"],
+}
+REMOTE_WORKER_ASSET_PRIORITY = [
+    "front_resized",
+    "back_resized",
+    "front_normalized",
+    "back_normalized",
+    "front_corner_tl",
+    "front_corner_tr",
+    "front_corner_bl",
+    "front_corner_br",
+    "back_corner_tl",
+    "back_corner_tr",
+    "back_corner_bl",
+    "back_corner_br",
+    "front_edge_top",
+    "front_edge_right",
+    "front_edge_bottom",
+    "front_edge_left",
+    "back_edge_top",
+    "back_edge_right",
+    "back_edge_bottom",
+    "back_edge_left",
+]
+REMOTE_WORKER_LABELS = {
+    "front_resized": "front_full",
+    "back_resized": "back_full",
+    "front_normalized": "front_full",
+    "back_normalized": "back_full",
+    "front_corner_tl": "front_top_left_corner",
+    "front_corner_tr": "front_top_right_corner",
+    "front_corner_bl": "front_bottom_left_corner",
+    "front_corner_br": "front_bottom_right_corner",
+    "back_corner_tl": "back_top_left_corner",
+    "back_corner_tr": "back_top_right_corner",
+    "back_corner_bl": "back_bottom_left_corner",
+    "back_corner_br": "back_bottom_right_corner",
 }
 ALLOWED_FINDING_TYPES = {
     "corner_whitening",
@@ -79,12 +116,13 @@ def http_json(
     url: str,
     body: dict[str, Any] | None = None,
     timeout_seconds: int | None = None,
+    headers: dict[str, str] | None = None,
 ) -> dict[str, Any]:
     data = None
-    headers = {"Content-Type": "application/json"}
+    request_headers = {"Content-Type": "application/json", **(headers or {})}
     if body is not None:
         data = json.dumps(body).encode("utf-8")
-    request = urllib.request.Request(url, data=data, method=method, headers=headers)
+    request = urllib.request.Request(url, data=data, method=method, headers=request_headers)
     try:
         with urllib.request.urlopen(request, timeout=timeout_seconds or LOCAL_AI_TIMEOUT_SECONDS) as response:
             return json.loads(response.read().decode("utf-8"))
@@ -334,11 +372,15 @@ class RemoteWorkerProvider(LocalAIProvider):
             raise ValueError("LOCAL_AI_WORKER_BASE_URL is not configured.")
         base = self.worker_base_url.rstrip("/")
         last_error: Exception | None = None
-        for path in ["/api/local-ai/status", "/api/health", "/health"]:
+        for path in ["/health", "/api/health", "/api/local-ai/status"]:
             try:
-                return http_json("GET", f"{base}{path}", timeout_seconds=5)
+                return http_json("GET", f"{base}{path}", timeout_seconds=5, headers=remote_worker_headers())
+            except LocalAIHTTPError as exc:
+                last_error = exc
+                continue
             except Exception as exc:
                 last_error = exc
+                break
         raise ValueError(f"Remote Local AI worker is not reachable: {last_error}")
 
     def status(self) -> dict[str, Any]:
@@ -358,7 +400,10 @@ class RemoteWorkerProvider(LocalAIProvider):
             status["worker_reachable"] = True
             status["model_name"] = worker_model
             status["vision_capable"] = str(worker_status.get("vision_capable") or "unknown")
-            status["message"] = "Remote Local AI worker is reachable over the configured URL."
+            if worker_status.get("lm_studio_reachable") is False:
+                status["message"] = "Remote AI worker is reachable, but LM Studio is not reachable on the Windows client."
+            else:
+                status["message"] = "Remote Local AI worker is reachable over the configured URL."
         except Exception as exc:
             status["message"] = str(exc)
         return status
@@ -372,15 +417,20 @@ class RemoteWorkerProvider(LocalAIProvider):
             raw_models = worker_status.get("models")
             models = [str(item) for item in raw_models] if isinstance(raw_models, list) else ([model] if model else [])
             selected_model_found = not LOCAL_AI_MODEL_NAME or LOCAL_AI_MODEL_NAME in models or LOCAL_AI_MODEL_NAME == model
+            lm_studio_reachable = worker_status.get("lm_studio_reachable") is not False
             return {
-                "ok": selected_model_found,
+                "ok": selected_model_found and lm_studio_reachable,
                 "reachable": True,
                 "mode": self.mode,
                 "worker_reachable": True,
                 "models": models,
                 "selected_model": LOCAL_AI_MODEL_NAME,
                 "selected_model_found": selected_model_found,
-                "message": "Remote Local AI worker is reachable.",
+                "message": (
+                    "Remote Local AI worker is reachable."
+                    if lm_studio_reachable
+                    else "Remote AI worker is reachable, but LM Studio is not reachable on the Windows client."
+                ),
             }
         except Exception as exc:
             return {
@@ -403,22 +453,23 @@ class RemoteWorkerProvider(LocalAIProvider):
             self._worker_status()
         except Exception as exc:
             raise HTTPException(status_code=502, detail=f"Remote Local AI worker is not reachable: {exc}") from exc
-        raise HTTPException(
-            status_code=501,
-            detail="Remote Local AI worker is reachable, but analysis handoff is not implemented yet.",
-        )
 
     def call_chat(self, prompt: str, assets: list[AnalysisAsset]) -> tuple[str, str, bool]:
-        raise HTTPException(
-            status_code=501,
-            detail="Remote Local AI worker analysis handoff is prepared but not implemented yet.",
-        )
+        payload = {
+            "card_id": None,
+            "card_name": "CardGrader remote worker legacy analysis",
+            "set_name": None,
+            "language": None,
+            "centering": {"backend_prompt_preview": prompt[:2000]},
+            "images": [remote_worker_image_payload(asset) for asset in assets[:LOCAL_AI_MAX_IMAGES]],
+            "grading_profile": "pokemon_tcg_default",
+        }
+        worker_response = remote_ai_grade_http(payload)
+        content = json.dumps(worker_response.get("result") or worker_response, ensure_ascii=False)
+        return content, json.dumps(worker_response, ensure_ascii=False, indent=2), False
 
     def call_text_repair(self, raw_output: str) -> tuple[str, str]:
-        raise HTTPException(
-            status_code=501,
-            detail="Remote Local AI worker analysis handoff is prepared but not implemented yet.",
-        )
+        return raw_output, raw_output
 
 
 def active_local_ai_provider() -> LocalAIProvider:
@@ -427,6 +478,12 @@ def active_local_ai_provider() -> LocalAIProvider:
     if LOCAL_AI_MODE == "remote_worker":
         return RemoteWorkerProvider()
     return LocalAIProvider()
+
+
+def remote_worker_headers() -> dict[str, str]:
+    if not AI_WORKER_SHARED_TOKEN:
+        return {}
+    return {"Authorization": f"Bearer {AI_WORKER_SHARED_TOKEN}"}
 
 
 def test_local_ai_connection() -> dict[str, Any]:
@@ -955,6 +1012,326 @@ def dry_run_local_ai(session: Session, owned_card_id: int, pass_type: str = "fas
         "base_url": config.get("base_url") or "",
         "prompt_preview": prompt,
     }
+
+
+def latest_centering_for_side(session: Session, owned_card_id: int, side: str) -> CenteringMeasurement | None:
+    return session.exec(
+        select(CenteringMeasurement)
+        .where(CenteringMeasurement.owned_card_id == owned_card_id)
+        .where(CenteringMeasurement.side == side)
+        .order_by(CenteringMeasurement.created_at.desc(), CenteringMeasurement.id.desc())
+    ).first()
+
+
+def remote_worker_centering_payload(session: Session, owned_card_id: int, opencv_run: AnalysisRun | None) -> dict[str, Any]:
+    front = latest_centering_for_side(session, owned_card_id, "front")
+    back = latest_centering_for_side(session, owned_card_id, "back")
+    return {
+        "front_left_right": front.horizontal_ratio_label if front else None,
+        "front_top_bottom": front.vertical_ratio_label if front else None,
+        "back_left_right": back.horizontal_ratio_label if back else None,
+        "back_top_bottom": back.vertical_ratio_label if back else None,
+        "front_score": front.centering_score if front else None,
+        "back_score": back.centering_score if back else None,
+        "opencv_centering_score": opencv_run.centering_score if opencv_run else None,
+    }
+
+
+def collect_remote_worker_assets(session: Session, opencv_run_id: int) -> list[AnalysisAsset]:
+    assets = session.exec(
+        select(AnalysisAsset)
+        .where(AnalysisAsset.analysis_run_id == opencv_run_id)
+        .order_by(AnalysisAsset.created_at, AnalysisAsset.id)
+    ).all()
+    priority = {label: index for index, label in enumerate(REMOTE_WORKER_ASSET_PRIORITY)}
+    allowed = set(priority)
+    selected = [asset for asset in assets if (asset.label or "") in allowed]
+    return sorted(
+        selected,
+        key=lambda asset: (
+            priority.get(asset.label or "", 999),
+            asset.created_at,
+            asset.id or 0,
+        ),
+    )[:LOCAL_AI_MAX_IMAGES]
+
+
+def remote_worker_label(asset: AnalysisAsset) -> str:
+    label = asset.label or "image"
+    if label in REMOTE_WORKER_LABELS:
+        return REMOTE_WORKER_LABELS[label]
+    return label.replace("_resized", "_full")
+
+
+def remote_worker_image_payload(asset: AnalysisAsset) -> dict[str, str]:
+    path = local_path(asset.file_path)
+    mime_type = mimetypes.guess_type(path.name)[0] or "image/jpeg"
+    return {
+        "label": remote_worker_label(asset),
+        "mime_type": mime_type,
+        "base64": base64.b64encode(path.read_bytes()).decode("ascii"),
+    }
+
+
+def remote_grade_payload(
+    session: Session,
+    owned_card: OwnedCard,
+    card: Card,
+    opencv_run: AnalysisRun | None,
+    assets: list[AnalysisAsset],
+) -> dict[str, Any]:
+    return {
+        "card_id": str(card.id),
+        "owned_card_id": str(owned_card.id),
+        "card_name": card.name,
+        "set_name": card.set_name,
+        "language": card.language,
+        "centering": remote_worker_centering_payload(session, owned_card.id, opencv_run),
+        "images": [remote_worker_image_payload(asset) for asset in assets],
+        "grading_profile": "pokemon_tcg_default",
+    }
+
+
+def remote_ai_grade_http(payload: dict[str, Any]) -> dict[str, Any]:
+    if LOCAL_AI_MODE != "remote_worker":
+        raise HTTPException(status_code=400, detail="LOCAL_AI_MODE must be remote_worker for remote AI grading.")
+    if not LOCAL_AI_WORKER_BASE_URL.strip():
+        raise HTTPException(status_code=400, detail="LOCAL_AI_WORKER_BASE_URL is not configured.")
+    url = f"{LOCAL_AI_WORKER_BASE_URL.rstrip('/')}/api/ai/grade"
+    print(
+        "Remote AI worker request",
+        {
+            "url": url,
+            "timeout": LOCAL_AI_TIMEOUT_SECONDS,
+            "images": len(payload.get("images", [])),
+        },
+    )
+    try:
+        return http_json(
+            "POST",
+            url,
+            payload,
+            timeout_seconds=LOCAL_AI_TIMEOUT_SECONDS,
+            headers=remote_worker_headers(),
+        )
+    except LocalAIHTTPError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "ok": False,
+                "error": "remote_ai_worker_error",
+                "message": f"Windows AI worker returned HTTP {exc.status_code}.",
+                "response_preview": exc.response_body[:1000],
+            },
+        ) from exc
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        print(f"Remote AI worker unreachable: {exc}")
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "ok": False,
+                "error": "remote_ai_worker_unreachable",
+                "message": (
+                    "CardGrader backend could not reach the Windows AI worker. "
+                    "Check Tailscale, worker service, firewall, and LM Studio."
+                ),
+            },
+        ) from exc
+
+
+def score_value(value: Any) -> float | None:
+    if value is None:
+        return None
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError):
+        return None
+    return max(0.0, min(10.0, numeric))
+
+
+def grade_range_value(value: Any) -> str | None:
+    if value is None:
+        return None
+    return str(value)
+
+
+def issue_side(area: str) -> str:
+    if area.startswith("front"):
+        return "front"
+    if area.startswith("back"):
+        return "back"
+    return "unknown"
+
+
+def issue_type(issue: dict[str, Any]) -> str:
+    text = " ".join(str(issue.get(key) or "").lower() for key in ["area", "description"])
+    if "whitening" in text:
+        return "corner_whitening" if "corner" in text else "edge_whitening"
+    if "scratch" in text:
+        return "scratch"
+    if "dent" in text:
+        return "dent"
+    if "print line" in text or "print_line" in text:
+        return "print_line"
+    if "stain" in text:
+        return "stain"
+    if "wear" in text:
+        return "surface_wear"
+    return "unknown"
+
+
+def grade_impact_for_severity(severity: str) -> str:
+    if severity in {"severe", "moderate"}:
+        return "high"
+    if severity == "minor":
+        return "medium"
+    if severity == "very_minor":
+        return "low"
+    return "none"
+
+
+def save_remote_worker_findings(session: Session, analysis_run: AnalysisRun, issues: Any) -> int:
+    if not isinstance(issues, list):
+        return 0
+    saved = 0
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        severity = str(issue.get("severity") or "minor").lower()
+        if severity not in ALLOWED_SEVERITIES:
+            severity = "minor"
+        area = str(issue.get("area") or "unknown")
+        session.add(
+            AnalysisFinding(
+                analysis_run_id=analysis_run.id,
+                media_id=None,
+                finding_type=issue_type(issue),
+                severity=severity,
+                confidence=None,
+                location_label=area,
+                bbox_x=0,
+                bbox_y=0,
+                bbox_width=0,
+                bbox_height=0,
+                title=area.replace("_", " "),
+                description=issue.get("description"),
+                grade_impact=grade_impact_for_severity(severity),
+                side=issue_side(area),
+                confirmed=True,
+                uncertainty_reason=None,
+                photo_quality_issue=False,
+            )
+        )
+        saved += 1
+    return saved
+
+
+def run_remote_ai_grade(session: Session, owned_card_id: int) -> dict[str, Any]:
+    owned_card = session.get(OwnedCard, owned_card_id)
+    if owned_card is None:
+        raise HTTPException(status_code=404, detail="Owned card not found")
+    card = session.get(Card, owned_card.card_id)
+    if card is None:
+        raise HTTPException(status_code=404, detail="Card not found")
+    if LOCAL_AI_MODE != "remote_worker":
+        raise HTTPException(status_code=400, detail="Remote AI grading requires LOCAL_AI_MODE=remote_worker.")
+
+    opencv_run = latest_completed_opencv_run(session, owned_card_id)
+    if opencv_run is None:
+        raise HTTPException(status_code=400, detail="Run OpenCV analysis before remote AI grading.")
+    assets = collect_remote_worker_assets(session, opencv_run.id)
+    if not assets:
+        raise HTTPException(status_code=400, detail="No OpenCV assets found for remote AI grading.")
+
+    analysis_run = AnalysisRun(
+        owned_card_id=owned_card_id,
+        mode="remote_ai_grade",
+        status="running",
+        model_provider="remote_worker",
+        model_name=LOCAL_AI_MODEL_NAME,
+        prompt_version="remote_worker_grade_v1",
+        analysis_version="remote_ai_worker_v1",
+        centering_score=opencv_run.centering_score,
+    )
+    session.add(analysis_run)
+    session.commit()
+    session.refresh(analysis_run)
+
+    payload = remote_grade_payload(session, owned_card, card, opencv_run, assets)
+    try:
+        worker_response = remote_ai_grade_http(payload)
+        save_text_asset(
+            session,
+            analysis_run.id,
+            "remote_ai_worker_response",
+            "remote_ai_worker_response",
+            "remote_ai_worker_response.json",
+            json.dumps(worker_response, ensure_ascii=False, indent=2),
+        )
+        if not worker_response.get("ok"):
+            analysis_run.status = "failed"
+            analysis_run.error_message = str(worker_response.get("error") or "Remote AI worker returned ok=false.")
+            analysis_run.completed_at = datetime.utcnow()
+            session.add(analysis_run)
+            session.commit()
+            session.refresh(analysis_run)
+            return {
+                "ok": False,
+                "analysis_run": analysis_run,
+                "worker_result": worker_response,
+                "images_sent": len(assets),
+                "image_labels_sent": selected_asset_labels(assets),
+            }
+
+        result = worker_response.get("result") if isinstance(worker_response.get("result"), dict) else worker_response
+        subscores = result.get("subscores") if isinstance(result.get("subscores"), dict) else {}
+        grade_range = result.get("grade_range") if isinstance(result.get("grade_range"), dict) else {}
+        finding_count = save_remote_worker_findings(session, analysis_run, result.get("detected_issues"))
+
+        analysis_run.status = "completed"
+        analysis_run.model_name = str(worker_response.get("model") or LOCAL_AI_MODEL_NAME or "")
+        analysis_run.overall_score = score_value(result.get("estimated_grade"))
+        analysis_run.estimated_grade_low = grade_range_value(grade_range.get("low"))
+        analysis_run.estimated_grade_high = grade_range_value(grade_range.get("high"))
+        analysis_run.confidence_level = str(result.get("confidence") or "medium").lower()
+        analysis_run.centering_score = score_value(subscores.get("centering")) or analysis_run.centering_score
+        analysis_run.corners_score = score_value(subscores.get("corners"))
+        analysis_run.edges_score = score_value(subscores.get("edges"))
+        analysis_run.surface_score = score_value(subscores.get("surface"))
+        analysis_run.human_summary = result.get("summary")
+        analysis_run.recommendation = result.get("recommended_action")
+        analysis_run.recommendation_reason = f"PSA 10 risk: {result.get('psa_10_risk') or 'unknown'}"
+        analysis_run.completed_at = datetime.utcnow()
+        session.add(analysis_run)
+        session.commit()
+        session.refresh(analysis_run)
+        return {
+            "ok": True,
+            "analysis_run": analysis_run,
+            "worker_result": result,
+            "worker_meta": {
+                key: worker_response.get(key)
+                for key in ["model", "duration_seconds", "raw_response_preview"]
+                if key in worker_response
+            },
+            "finding_count": finding_count,
+            "images_sent": len(assets),
+            "image_labels_sent": selected_asset_labels(assets),
+        }
+    except HTTPException:
+        analysis_run.status = "failed"
+        analysis_run.error_message = "Remote AI worker request failed."
+        analysis_run.completed_at = datetime.utcnow()
+        session.add(analysis_run)
+        session.commit()
+        raise
+    except Exception as exc:
+        analysis_run.status = "failed"
+        analysis_run.error_message = str(exc)
+        analysis_run.completed_at = datetime.utcnow()
+        session.add(analysis_run)
+        session.commit()
+        raise HTTPException(status_code=502, detail=f"Remote AI grading failed: {exc}") from exc
 
 
 def choose_single_debug_asset(assets: list[AnalysisAsset]) -> AnalysisAsset:

@@ -125,6 +125,77 @@ Keep access private:
 
 If the remote worker is not reachable, `/api/local-ai/status` and the Settings page show a clear worker error. The backend should keep running.
 
+### Windows AI Worker Bridge
+
+Phase 15.4 adds a lightweight worker under `ai-worker/` for the Windows gamer PC.
+
+Windows startup:
+
+1. Start Tailscale on the Windows PC.
+2. Start LM Studio.
+3. Load a vision-capable local model.
+4. Start the LM Studio local server at `http://127.0.0.1:1234/v1`.
+5. Start the worker:
+
+```powershell
+cd ai-worker
+copy .env.example .env
+.\start_worker.bat
+```
+
+Check locally on Windows:
+
+```powershell
+Invoke-RestMethod http://127.0.0.1:8765/health
+```
+
+Check from the Linux server over Tailscale:
+
+```bash
+curl http://WINDOWS-TAILSCALE-IP:8765/health
+```
+
+Configure `.env.server` on the Linux server:
+
+```text
+LOCAL_AI_MODE=remote_worker
+LOCAL_AI_WORKER_BASE_URL=http://WINDOWS-TAILSCALE-IP:8765
+LOCAL_AI_TIMEOUT_SECONDS=300
+LOCAL_AI_MAX_IMAGES=8
+LOCAL_AI_MAX_TOKENS=4096
+LOCAL_AI_DISABLE_THINKING=true
+AI_WORKER_SHARED_TOKEN=
+```
+
+Restart the backend container after changes:
+
+```bash
+docker compose --env-file .env.server up -d --build cardgrader-backend
+```
+
+Optional shared token:
+
+- Set the same `AI_WORKER_SHARED_TOKEN` in `.env.server` and `ai-worker/.env`.
+- The backend sends `Authorization: Bearer <token>`.
+- If empty, requests are unauthenticated for the local/Tailscale MVP.
+
+The worker endpoint used by the backend is:
+
+```text
+POST /api/ai/grade
+```
+
+Images are transferred as base64 JSON payloads. The backend does not send server file paths to the worker.
+
+Common troubleshooting:
+
+- Worker not reachable: check Tailscale, MagicDNS/IP, worker process, and Windows Firewall.
+- Windows Firewall blocks port: allow TCP `8765` only on the Tailscale/private network where possible.
+- LM Studio not reachable: start the LM Studio server and verify `LM_STUDIO_BASE_URL`.
+- Wrong LM Studio port: update `ai-worker/.env`.
+- Model does not support images: load a vision-capable model in LM Studio.
+- Model returned invalid JSON: disable thinking, use a stronger vision model, reduce image count, or inspect the worker response preview.
+
 ## Seed Rowlet Demo
 
 ```powershell
@@ -383,7 +454,7 @@ Server `.env` example:
 
 ```text
 LOCAL_AI_MODE=remote_worker
-LOCAL_AI_WORKER_BASE_URL=http://100.x.y.z:8720
+LOCAL_AI_WORKER_BASE_URL=http://WINDOWS-TAILSCALE-IP:8765
 LOCAL_AI_MODEL_NAME=<your-local-vision-model>
 LOCAL_AI_TIMEOUT_SECONDS=180
 LOCAL_AI_MAX_IMAGES=1
@@ -394,10 +465,10 @@ LOCAL_AI_DISABLE_THINKING=true
 Gamer PC responsibilities:
 
 - Run LM Studio locally, usually on `http://127.0.0.1:1234/v1`.
-- Run the future CardGrader Local AI worker/bridge.
+- Run the CardGrader Local AI worker/bridge from `ai-worker/`.
 - Advertise only the worker endpoint through Tailscale/private networking.
 
-Phase 15.2 adds the mode/config/status contract and a backend provider placeholder for `remote_worker`. The actual worker process and analysis handoff can be implemented next. Until that bridge exists, normal Local AI analysis should use `server_local`.
+In `remote_worker` mode, the backend sends selected OpenCV images as base64 to the Windows worker at `/api/ai/grade`. The worker then calls localhost LM Studio and returns structured JSON.
 
 By default Local AI sends only:
 

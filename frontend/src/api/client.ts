@@ -19,6 +19,7 @@ import type {
   LocalAIDebugSingleImageResponse,
   LocalAIDryRun,
   LocalAITestConnection,
+  RemoteAIGradeResponse,
   OwnedCard,
   PriceObservation,
   ResetLocalDataResponse,
@@ -117,6 +118,8 @@ export const api = {
     request<{ analysis_run: AnalysisRun; finding_count: number; report: AnalysisReport }>(`/api/owned-cards/${ownedCardId}/analyze/local-ai-aggregate`, { method: "POST" }),
   runLocalAIFullReview: (ownedCardId: number) =>
     request<{ aggregate: { analysis_run: AnalysisRun; finding_count: number; report: AnalysisReport } }>(`/api/owned-cards/${ownedCardId}/analyze/local-ai-full-review`, { method: "POST" }),
+  runRemoteAIGrade: (ownedCardId: number) =>
+    request<RemoteAIGradeResponse>(`/api/owned-cards/${ownedCardId}/analyze/remote-ai-grade`, { method: "POST" }),
   runLocalAIDryRun: (ownedCardId: number) =>
     request<LocalAIDryRun>(`/api/owned-cards/${ownedCardId}/analyze/local-ai-dry-run`, { method: "POST" }),
   runLocalAIDryRunForPass: (ownedCardId: number, passType: "front" | "back" | "fast" | "full") =>

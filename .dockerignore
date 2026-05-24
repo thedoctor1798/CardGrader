@@ -17,3 +17,4 @@ logs/
 !.env.example
 !.env.server.example
 !backend/.env.local.example
+!ai-worker/.env.example

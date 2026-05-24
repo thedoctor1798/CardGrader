@@ -15,6 +15,8 @@ import type {
   LocalAIStatus,
   OwnedCard,
   PriceObservation,
+  RemoteAIGradeResponse,
+  RemoteAIWorkerResult,
 } from "../api/types";
 import { EmptyState } from "../components/EmptyState";
 import { GlobalLoadingOverlay } from "../components/GlobalLoadingOverlay";
@@ -119,6 +121,74 @@ function FieldLabel({ label, children }: { label: string; children: ReactNode })
       <span>{label}</span>
       {children}
     </label>
+  );
+}
+
+function displayRemoteValue(value?: number | string | null): string {
+  if (value === null || value === undefined || value === "") return "-";
+  if (typeof value === "number") return formatNumber(value);
+  return value;
+}
+
+function RemoteAIGradePanel({ response }: { response: RemoteAIGradeResponse }) {
+  const result = response.worker_result as RemoteAIWorkerResult;
+  const issues = Array.isArray(result.detected_issues) ? result.detected_issues : [];
+  return (
+    <div className={response.ok ? "mt-4 rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-4 text-sm text-emerald-50" : "mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-100"}>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <div className="font-semibold">{response.ok ? "Remote AI grading" : "Remote AI worker hiba"}</div>
+          <div className="mt-1 text-xs opacity-80">
+            Képek: {response.images_sent ?? "-"} · {response.image_labels_sent?.join(", ") || "-"}
+          </div>
+        </div>
+        <div className="text-right">
+          <div className="text-2xl font-semibold">{displayRemoteValue(result.estimated_grade)}</div>
+          <div className="text-xs opacity-80">Becslés</div>
+        </div>
+      </div>
+      {response.ok ? (
+        <div className="mt-4 space-y-4">
+          <div className="grid grid-cols-2 gap-2">
+            <StatCard label="Range" value={`${displayRemoteValue(result.grade_range?.low)} - ${displayRemoteValue(result.grade_range?.high)}`} />
+            <StatCard label="Confidence" value={result.confidence || "-"} />
+            <StatCard label="Centering" value={displayRemoteValue(result.subscores?.centering)} />
+            <StatCard label="Corners" value={displayRemoteValue(result.subscores?.corners)} />
+            <StatCard label="Edges" value={displayRemoteValue(result.subscores?.edges)} />
+            <StatCard label="Surface" value={displayRemoteValue(result.subscores?.surface)} />
+          </div>
+          {result.summary && <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-slate-200">{result.summary}</div>}
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">PSA 10 risk</div>
+              <div className="mt-1 text-slate-100">{result.psa_10_risk || "-"}</div>
+            </div>
+            <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">
+              <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Ajánlás</div>
+              <div className="mt-1 text-slate-100">{result.recommended_action || "-"}</div>
+            </div>
+          </div>
+          {issues.length > 0 && (
+            <div>
+              <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Detected issues</div>
+              <div className="space-y-2">
+                {issues.map((issue, index) => (
+                  <div key={`${issue.area ?? "issue"}-${index}`} className="rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-slate-200">
+                    <div className="flex flex-wrap items-center gap-2">
+                      <span className="font-medium">{issue.area || "unknown"}</span>
+                      <FindingBadge tone={severityTone(issue.severity)}>{issue.severity || "unknown"}</FindingBadge>
+                    </div>
+                    <div className="mt-1 text-slate-300">{issue.description || "-"}</div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
+        </div>
+      ) : (
+        <pre className="mt-3 max-h-56 overflow-auto whitespace-pre-wrap rounded bg-slate-950/70 p-3 text-xs text-rose-100">{JSON.stringify(response.worker_result, null, 2)}</pre>
+      )}
+    </div>
   );
 }
 
@@ -249,6 +319,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const [localAI, setLocalAI] = useState<LocalAIStatus | null>(null);
   const [localAIDryRun, setLocalAIDryRun] = useState<LocalAIDryRun | null>(null);
   const [localAIDebug, setLocalAIDebug] = useState<LocalAIDebugSingleImageResponse | null>(null);
+  const [remoteAIGrade, setRemoteAIGrade] = useState<RemoteAIGradeResponse | null>(null);
   const [report, setReport] = useState<AnalysisReport | null>(null);
   const [loading, setLoading] = useState(true);
   const [busyLabel, setBusyLabel] = useState<string | null>(null);
@@ -277,9 +348,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
     ? "Előbb futtasd az OpenCV elemzést."
     : !localAI?.enabled
       ? "Local AI nincs bekapcsolva."
-      : localAI.mode === "remote_worker"
-        ? "Remote worker mód elő van készítve, de az elemzés átadása még nincs bekötve."
-      : !localAI.model_name
+      : localAI.mode === "server_local" && !localAI.model_name
         ? "LOCAL_AI_MODEL_NAME nincs beállítva."
         : !localAI.reachable
           ? localAI.mode === "server_local" ? "LM Studio nem érhető el." : "Local AI worker nem érhető el."
@@ -307,6 +376,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const load = useCallback(async (showPageLoading = true) => {
     if (showPageLoading) setLoading(true);
     try {
+      setRemoteAIGrade(null);
       const owned = await api.getOwnedCard(ownedCardId);
       setOwnedCard(owned);
       setOwnedEditForm(editFormFromOwnedCard(owned));
@@ -550,6 +620,22 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
     setBusyLabel("Local AI elemzés fut...");
     setNotice(null);
     try {
+      if (localAI?.mode === "remote_worker") {
+        const remoteResult = await api.runRemoteAIGrade(ownedCardId);
+        setRemoteAIGrade(remoteResult);
+        const runsData = await api.getAnalysisRuns(ownedCardId);
+        setAnalysisRuns(runsData);
+        if (remoteResult.analysis_run?.id) {
+          await loadReport(remoteResult.analysis_run.id);
+        }
+        if (!remoteResult.ok) {
+          setScopedError("analysis", "Remote AI worker hibát adott vissza. Nézd meg a részleteket a panelben.");
+        } else {
+          setScopedSuccess("analysis", `Remote AI grading elkészült. Küldött képek: ${remoteResult.images_sent ?? "-"}.`);
+        }
+        setError(null);
+        return;
+      }
       const aiResult = await api.runLocalAIFullReview(ownedCardId);
       const runsData = await api.getAnalysisRuns(ownedCardId);
       setAnalysisRuns(runsData);
@@ -878,6 +964,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
               </div>
             )}
             <InlineNotice notice={notice} scope="analysis" />
+            {remoteAIGrade && <RemoteAIGradePanel response={remoteAIGrade} />}
             <details className="mt-4 rounded-lg border border-slate-800 bg-slate-950/25 p-3">
               <summary className="cursor-pointer text-sm font-medium text-slate-300">Fejlesztői / Debug eszközök</summary>
               <div className="mt-3 grid gap-2 md:grid-cols-2">
