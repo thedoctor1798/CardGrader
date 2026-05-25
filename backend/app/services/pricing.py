@@ -107,6 +107,8 @@ def latest_price_for_owned_card(session: Session, owned_card_id: int) -> PriceOb
 
 
 def calculate_collection_summary(session: Session) -> CollectionSummaryRead:
+    from .valuation_service import calculate_collection_valuation
+
     owned_cards = session.exec(select(OwnedCard)).all()
     total_cards = len(owned_cards)
     unique_cards = len({owned_card.card_id for owned_card in owned_cards})
@@ -118,26 +120,9 @@ def calculate_collection_summary(session: Session) -> CollectionSummaryRead:
         if owned_card.acquired_price_huf is not None
     )
 
-    latest_by_card_id: dict[int, Optional[PriceObservation]] = {}
-    collection_value_huf = 0.0
-    optimistic_value_huf = 0.0
-    cards_missing_price_total = 0
-
-    for owned_card in owned_cards:
-        if owned_card.card_id not in latest_by_card_id:
-            latest_by_card_id[owned_card.card_id] = get_latest_price_for_card(
-                session,
-                owned_card.card_id,
-            )
-
-        latest_price = latest_by_card_id[owned_card.card_id]
-        if latest_price is None or latest_price.raw_price_huf is None:
-            cards_missing_price_total += 1
-            continue
-
-        raw_price = float(latest_price.raw_price_huf)
-        collection_value_huf += raw_price
-        optimistic_value_huf += float(latest_price.psa_10_price_huf or raw_price)
+    valuation = calculate_collection_valuation(session)
+    collection_value_huf = valuation.total_value_huf
+    optimistic_value_huf = valuation.total_value_huf
 
     return CollectionSummaryRead(
         total_cards=total_cards,
@@ -150,7 +135,7 @@ def calculate_collection_summary(session: Session) -> CollectionSummaryRead:
         conservative_value_huf=collection_value_huf,
         expected_value_huf=collection_value_huf,
         optimistic_value_huf=optimistic_value_huf,
-        cards_missing_price_total=cards_missing_price_total,
+        cards_missing_price_total=valuation.missing_price_cards,
     )
 
 

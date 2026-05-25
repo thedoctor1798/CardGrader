@@ -292,6 +292,98 @@ Recognition troubleshooting:
 - Worker unreachable: check Tailscale, worker process, Windows Firewall, and `LOCAL_AI_WORKER_BASE_URL`.
 - Shared token mismatch: set the same `AI_WORKER_SHARED_TOKEN` in `.env.server` and `ai-worker/.env`.
 
+### Price History And Valuation
+
+Phase 15.6 adds backend-owned pricing and collection valuation. Price provider logic lives in backend adapters; the frontend only calls CardGrader API endpoints and never contains scraping/source logic.
+
+Server `.env.server` pricing defaults:
+
+```text
+PRICE_FETCH_ENABLED=true
+PRICE_REFRESH_ENABLED=false
+PRICE_REFRESH_INTERVAL_HOURS=24
+PRICE_DEFAULT_CURRENCY=HUF
+PRICE_RATE_LIMIT_SECONDS=3
+PRICE_REQUEST_TIMEOUT_SECONDS=30
+PRICE_SOURCES=manual,local_json
+PRICE_FETCH_AFTER_RECOGNITION=false
+PRICE_FX_EUR_HUF=
+PRICE_FX_USD_HUF=
+```
+
+Manual prices work without external providers:
+
+```bash
+curl -X POST http://localhost:8710/api/prices/manual \
+  -H "Content-Type: application/json" \
+  -d '{"card_id":1,"owned_card_id":1,"raw_price":1200,"market_price":1200,"psa_7":2500,"psa_8":3500,"psa_9":7000,"psa_10":24000,"currency":"HUF","confidence":"manual","condition_hint":"raw near mint"}'
+```
+
+Fetch configured sources for one card:
+
+```bash
+curl -X POST http://localhost:8710/api/prices/fetch/1 \
+  -H "Content-Type: application/json" \
+  -d '{"owned_card_id":1,"sources":["manual","local_json"],"force":false}'
+```
+
+Read latest, history, and valuation:
+
+```bash
+docker compose --env-file .env.server config | grep -E "PRICE_|CORS_ORIGINS|VITE_API_BASE_URL|published"
+curl http://localhost:8710/api/health
+curl http://localhost:8710/api/prices/latest/1
+curl http://localhost:8710/api/prices/history/1
+curl http://localhost:8710/api/collection/valuation
+```
+
+Refresh prices:
+
+```bash
+curl -X POST http://localhost:8710/api/prices/refresh-owned
+curl -X POST http://localhost:8710/api/prices/refresh-all
+```
+
+`local_json` reads optional local files such as `data/prices/1.json`, `catalog/prices/1.json`, `data/prices/prices.json`, or `catalog/prices.json`. A per-card file can look like:
+
+```json
+{
+  "source_card_id": "local-rowlet-090",
+  "prices": {
+    "raw_price": 1200,
+    "market_price": 1200,
+    "psa_7": 2500,
+    "psa_8": 3500,
+    "psa_9": 7000,
+    "psa_10": 24000,
+    "currency": "HUF"
+  },
+  "confidence": "medium",
+  "condition_hint": "raw near mint"
+}
+```
+
+Collection valuation uses the latest successful `price_history` row. Raw owned cards use market/raw price. Graded owned cards try a matching PSA grade when the owned copy text includes a PSA grade, then fall back to the nearest lower grade or raw price. Missing prices are counted and do not break valuation. HUF prices are copied into converted HUF fields; EUR/USD prices are stored as-is unless fixed `PRICE_FX_EUR_HUF` or `PRICE_FX_USD_HUF` is configured.
+
+Frontend behavior:
+
+- Card detail shows latest raw, market, PSA 7, PSA 8, PSA 9, PSA 10, source, confidence, and last fetch time.
+- Card detail can fetch configured sources with `Ár frissítése`.
+- Card detail can add a manual price with `Manuális ár hozzáadása`.
+- Card detail shows a simple raw/market and PSA 10 price history chart.
+- Dashboard shows total valuation, missing price count, 24h/7d change when history exists, and latest price refresh time.
+
+Pricing troubleshooting:
+
+- No source configured: set `PRICE_SOURCES=manual,local_json` or add a future provider after it is implemented.
+- No price found: add a manual price or create a matching local JSON price file.
+- Provider timeout: increase `PRICE_REQUEST_TIMEOUT_SECONDS` and keep external providers rate-limited.
+- Unsupported currency: use `HUF`, `EUR`, or `USD`.
+- Missing price history: call `POST /api/prices/manual` or `POST /api/prices/fetch/{card_id}`.
+- No price after card recognition: recognition does not force price fetching by default. Open the owned card and click `Ár frissítése`, or set `PRICE_FETCH_AFTER_RECOGNITION=true` for conservative backend-triggered fetching.
+
+External data sources must be used respectfully and rate-limited. Do not bypass anti-bot systems, do not commit secrets, and do not put scraping logic in the frontend.
+
 ## Seed Rowlet Demo
 
 ```powershell
@@ -314,6 +406,7 @@ Deleted tables:
 - analysis_findings
 - analysis_runs
 - card_media
+- price_history
 - price_observations
 - collection_snapshots
 - owned_cards

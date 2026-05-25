@@ -76,6 +76,42 @@ class PriceObservation(SQLModel, table=True):
     notes: Optional[str] = None
 
 
+class PriceHistory(SQLModel, table=True):
+    __tablename__ = "price_history"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    card_id: int = Field(foreign_key="cards.id", index=True)
+    owned_card_id: Optional[int] = Field(default=None, foreign_key="owned_cards.id", index=True)
+    source: str = Field(index=True)
+    source_card_id: Optional[str] = None
+    source_url: Optional[str] = None
+    raw_price: Optional[float] = None
+    market_price: Optional[float] = None
+    low_price: Optional[float] = None
+    high_price: Optional[float] = None
+    psa_7: Optional[float] = None
+    psa_8: Optional[float] = None
+    psa_9: Optional[float] = None
+    psa_10: Optional[float] = None
+    currency: str = Field(default="HUF", index=True)
+    converted_currency: Optional[str] = None
+    converted_market_price: Optional[float] = None
+    converted_raw_price: Optional[float] = None
+    converted_psa_7: Optional[float] = None
+    converted_psa_8: Optional[float] = None
+    converted_psa_9: Optional[float] = None
+    converted_psa_10: Optional[float] = None
+    confidence: Optional[str] = None
+    condition_hint: Optional[str] = None
+    fetched_at: datetime = Field(default_factory=utc_now, index=True)
+    raw_response_json: Optional[str] = None
+    debug_metadata_json: Optional[str] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class AnalysisRun(SQLModel, table=True):
     __tablename__ = "analysis_runs"
 

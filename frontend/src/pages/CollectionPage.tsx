@@ -69,6 +69,14 @@ function optionalInt(value: string): number | null {
   return Number.isFinite(parsed) ? Math.round(parsed) : null;
 }
 
+function entryValueHuf(entry?: { converted_market_price?: number | null; converted_raw_price?: number | null; market_price?: number | null; raw_price?: number | null; currency?: string | null } | null): number | null {
+  if (!entry) return null;
+  if (entry.converted_market_price !== null && entry.converted_market_price !== undefined) return entry.converted_market_price;
+  if (entry.converted_raw_price !== null && entry.converted_raw_price !== undefined) return entry.converted_raw_price;
+  if (entry.currency === "HUF") return entry.market_price ?? entry.raw_price ?? null;
+  return null;
+}
+
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="space-y-1.5 text-xs font-medium text-slate-400">
@@ -99,8 +107,12 @@ export function CollectionPage({ onOpenOwnedCard }: CollectionPageProps) {
         ownedCards.map(async (ownedCard) => {
           const card = cardList.find((item) => item.id === ownedCard.card_id) ?? null;
           try {
-            const price = await api.getLatestOwnedCardPrice(ownedCard.id);
-            return { ...ownedCard, card, latest_raw_price_huf: price?.raw_price_huf ?? null };
+            const price = await api.getLatestOwnedCardPriceHistory(ownedCard.id);
+            if (price.latest) {
+              return { ...ownedCard, card, latest_raw_price_huf: entryValueHuf(price.latest) };
+            }
+            const legacyPrice = await api.getLatestOwnedCardPrice(ownedCard.id);
+            return { ...ownedCard, card, latest_raw_price_huf: legacyPrice?.raw_price_huf ?? null };
           } catch {
             return { ...ownedCard, card, latest_raw_price_huf: null };
           }

@@ -4,12 +4,13 @@ from fastapi import APIRouter, Depends
 from sqlmodel import Session
 
 from ..database import get_session
-from ..schemas import CollectionSnapshotRead, CollectionSummaryRead
+from ..schemas import CollectionSnapshotRead, CollectionSummaryRead, CollectionValuationRead
 from ..services.pricing import (
     calculate_collection_summary,
     create_collection_snapshot,
     list_collection_snapshots,
 )
+from ..services.valuation_service import calculate_collection_valuation
 
 router = APIRouter()
 
@@ -27,3 +28,8 @@ def get_snapshots(session: Session = Depends(get_session)):
 @router.get("/collection/summary", response_model=CollectionSummaryRead)
 def get_collection_summary(session: Session = Depends(get_session)):
     return calculate_collection_summary(session)
+
+
+@router.get("/collection/valuation", response_model=CollectionValuationRead)
+def get_collection_valuation(session: Session = Depends(get_session)):
+    return calculate_collection_valuation(session)

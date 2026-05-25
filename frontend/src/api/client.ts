@@ -12,6 +12,7 @@ import type {
   CleanupGeneratedMediaResponse,
   CollectionSnapshot,
   CollectionSummary,
+  CollectionValuation,
   DemoSeedResponse,
   LocalAIStatus,
   LocalAIAnalysisResponse,
@@ -23,7 +24,14 @@ import type {
   RecognitionAcceptResponse,
   RecognitionResponse,
   OwnedCard,
+  ManualPriceCreate,
+  PriceFetchRequest,
+  PriceFetchResponse,
+  PriceHistoryEntry,
+  PriceHistoryResponse,
+  PriceLatestResponse,
   PriceObservation,
+  PriceRefreshResponse,
   ResetLocalDataResponse,
 } from "./types";
 
@@ -82,6 +90,7 @@ export const api = {
   getLocalAIConfig: () => request<LocalAIConfig>("/api/local-ai/config"),
   testLocalAIConnection: () => request<LocalAITestConnection>("/api/local-ai/test-connection", { method: "POST" }),
   getCollectionSummary: () => request<CollectionSummary>("/api/collection/summary"),
+  getCollectionValuation: () => request<CollectionValuation>("/api/collection/valuation"),
   getCollectionSnapshots: () => request<CollectionSnapshot[]>("/api/collection/snapshots"),
   createCollectionSnapshot: () => request<CollectionSnapshot>("/api/collection/snapshot", { method: "POST" }),
   getOwnedCards: () => request<OwnedCard[]>("/api/owned-cards"),
@@ -120,6 +129,24 @@ export const api = {
     }),
   getLatestOwnedCardPrice: (id: number) =>
     request<PriceObservation | null>(`/api/owned-cards/${id}/latest-price`, undefined, { notFoundAsNull: true }),
+  getLatestOwnedCardPriceHistory: (id: number) =>
+    request<PriceLatestResponse>(`/api/owned-cards/${id}/prices/latest`),
+  getLatestCardPriceHistory: (cardId: number) =>
+    request<PriceLatestResponse>(`/api/prices/latest/${cardId}`),
+  getPriceHistory: (cardId: number) =>
+    request<PriceHistoryResponse>(`/api/prices/history/${cardId}`),
+  fetchCardPrices: (cardId: number, body: PriceFetchRequest = {}) =>
+    request<PriceFetchResponse>(`/api/prices/fetch/${cardId}`, {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  createManualPrice: (body: ManualPriceCreate) =>
+    request<PriceHistoryEntry>("/api/prices/manual", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
+  refreshOwnedPrices: () => request<PriceRefreshResponse>("/api/prices/refresh-owned", { method: "POST" }),
+  refreshAllPrices: () => request<PriceRefreshResponse>("/api/prices/refresh-all", { method: "POST" }),
   createPrice: (cardId: number, body: Partial<PriceObservation>) =>
     request<PriceObservation>(`/api/cards/${cardId}/prices`, {
       method: "POST",

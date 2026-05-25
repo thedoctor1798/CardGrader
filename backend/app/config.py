@@ -35,6 +35,26 @@ def get_int_env(name: str, default: int) -> int:
         return default
 
 
+def get_float_env(name: str, default: float) -> float:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return default
+    try:
+        return float(value)
+    except ValueError:
+        return default
+
+
+def get_optional_float_env(name: str) -> float | None:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return None
+    try:
+        return float(value)
+    except ValueError:
+        return None
+
+
 def get_clamped_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(maximum, get_int_env(name, default)))
 
@@ -73,6 +93,16 @@ CATALOG_DIR = get_path_env("CATALOG_DIR", ROOT / "catalog")
 LOG_DIR = get_path_env("LOG_DIR", ROOT / "logs")
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{(DATA_DIR / 'cardgrader.db').as_posix()}")
 CORS_ORIGINS = get_csv_env("CORS_ORIGINS", DEFAULT_CORS_ORIGINS)
+PRICE_FETCH_ENABLED = get_bool_env("PRICE_FETCH_ENABLED", True)
+PRICE_REFRESH_ENABLED = get_bool_env("PRICE_REFRESH_ENABLED", False)
+PRICE_REFRESH_INTERVAL_HOURS = get_int_env("PRICE_REFRESH_INTERVAL_HOURS", 24)
+PRICE_DEFAULT_CURRENCY = (os.getenv("PRICE_DEFAULT_CURRENCY", "HUF").strip().upper() or "HUF")
+PRICE_RATE_LIMIT_SECONDS = get_float_env("PRICE_RATE_LIMIT_SECONDS", 3.0)
+PRICE_REQUEST_TIMEOUT_SECONDS = get_int_env("PRICE_REQUEST_TIMEOUT_SECONDS", 30)
+PRICE_SOURCES = get_csv_env("PRICE_SOURCES", ["manual", "local_json"])
+PRICE_FETCH_AFTER_RECOGNITION = get_bool_env("PRICE_FETCH_AFTER_RECOGNITION", False)
+PRICE_FX_EUR_HUF = get_optional_float_env("PRICE_FX_EUR_HUF")
+PRICE_FX_USD_HUF = get_optional_float_env("PRICE_FX_USD_HUF")
 
 
 LOCAL_AI_MODES = {"disabled", "server_local", "remote_worker"}

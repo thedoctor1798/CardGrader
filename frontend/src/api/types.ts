@@ -75,6 +75,125 @@ export type PriceObservation = {
   notes?: string | null;
 };
 
+export type PriceHistoryEntry = {
+  id: number;
+  card_id: number;
+  owned_card_id?: number | null;
+  source: string;
+  source_card_id?: string | null;
+  source_url?: string | null;
+  raw_price?: number | null;
+  market_price?: number | null;
+  low_price?: number | null;
+  high_price?: number | null;
+  psa_7?: number | null;
+  psa_8?: number | null;
+  psa_9?: number | null;
+  psa_10?: number | null;
+  currency: string;
+  converted_currency?: string | null;
+  converted_market_price?: number | null;
+  converted_raw_price?: number | null;
+  converted_psa_7?: number | null;
+  converted_psa_8?: number | null;
+  converted_psa_9?: number | null;
+  converted_psa_10?: number | null;
+  confidence?: string | null;
+  condition_hint?: string | null;
+  fetched_at: string;
+  raw_response_json?: string | null;
+  debug_metadata_json?: string | null;
+  error_code?: string | null;
+  error_message?: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+export type ManualPriceCreate = {
+  card_id: number;
+  owned_card_id?: number | null;
+  raw_price?: number | null;
+  market_price?: number | null;
+  low_price?: number | null;
+  high_price?: number | null;
+  psa_7?: number | null;
+  psa_8?: number | null;
+  psa_9?: number | null;
+  psa_10?: number | null;
+  currency: string;
+  confidence?: string | null;
+  condition_hint?: string | null;
+  source_url?: string | null;
+};
+
+export type PriceFetchRequest = {
+  owned_card_id?: number | null;
+  sources?: string[] | null;
+  force?: boolean;
+};
+
+export type PriceFetchResult = {
+  ok: boolean;
+  source: string;
+  price_history_id?: number | null;
+  source_card_id?: string | null;
+  source_url?: string | null;
+  error?: string | null;
+  message?: string | null;
+  duration_seconds?: number | null;
+};
+
+export type PriceFetchResponse = {
+  ok: boolean;
+  card_id: number;
+  fetched_count: number;
+  failed_count: number;
+  latest_price?: PriceHistoryEntry | null;
+  results: PriceFetchResult[];
+  error?: string | null;
+  message?: string | null;
+};
+
+export type PriceLatestResponse = {
+  ok: boolean;
+  card_id: number;
+  owned_card_id?: number | null;
+  latest?: PriceHistoryEntry | null;
+  error?: string | null;
+  message?: string | null;
+};
+
+export type PriceHistoryResponse = {
+  ok: boolean;
+  card_id: number;
+  latest?: PriceHistoryEntry | null;
+  history: PriceHistoryEntry[];
+};
+
+export type PriceRefreshResponse = {
+  ok: boolean;
+  cards_checked: number;
+  success_count: number;
+  failure_count: number;
+  started_at: string;
+  finished_at: string;
+  message?: string | null;
+};
+
+export type CollectionValuation = {
+  ok: boolean;
+  currency: string;
+  total_value_huf: number;
+  raw_value_huf: number;
+  graded_value_huf: number;
+  owned_cards_count: number;
+  unique_cards_count: number;
+  missing_price_cards: number;
+  price_change_24h_huf?: number | null;
+  price_change_7d_huf?: number | null;
+  latest_refresh_at?: string | null;
+};
+
 export type CollectionSummary = {
   total_cards: number;
   unique_cards: number;

@@ -33,6 +33,125 @@ class PriceObservationRead(SQLModel):
     notes: Optional[str] = None
 
 
+class PriceHistoryRead(SQLModel):
+    id: int
+    card_id: int
+    owned_card_id: Optional[int] = None
+    source: str
+    source_card_id: Optional[str] = None
+    source_url: Optional[str] = None
+    raw_price: Optional[float] = None
+    market_price: Optional[float] = None
+    low_price: Optional[float] = None
+    high_price: Optional[float] = None
+    psa_7: Optional[float] = None
+    psa_8: Optional[float] = None
+    psa_9: Optional[float] = None
+    psa_10: Optional[float] = None
+    currency: str
+    converted_currency: Optional[str] = None
+    converted_market_price: Optional[float] = None
+    converted_raw_price: Optional[float] = None
+    converted_psa_7: Optional[float] = None
+    converted_psa_8: Optional[float] = None
+    converted_psa_9: Optional[float] = None
+    converted_psa_10: Optional[float] = None
+    confidence: Optional[str] = None
+    condition_hint: Optional[str] = None
+    fetched_at: datetime
+    raw_response_json: Optional[str] = None
+    debug_metadata_json: Optional[str] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ManualPriceCreate(SQLModel):
+    card_id: int
+    owned_card_id: Optional[int] = None
+    raw_price: Optional[float] = None
+    market_price: Optional[float] = None
+    low_price: Optional[float] = None
+    high_price: Optional[float] = None
+    psa_7: Optional[float] = None
+    psa_8: Optional[float] = None
+    psa_9: Optional[float] = None
+    psa_10: Optional[float] = None
+    currency: str = "HUF"
+    confidence: Optional[str] = "manual"
+    condition_hint: Optional[str] = None
+    source_url: Optional[str] = None
+
+
+class PriceFetchRequest(SQLModel):
+    owned_card_id: Optional[int] = None
+    sources: Optional[list[str]] = None
+    force: bool = False
+
+
+class PriceFetchResultRead(SQLModel):
+    ok: bool
+    source: str
+    price_history_id: Optional[int] = None
+    source_card_id: Optional[str] = None
+    source_url: Optional[str] = None
+    error: Optional[str] = None
+    message: Optional[str] = None
+    duration_seconds: Optional[float] = None
+
+
+class PriceFetchResponse(SQLModel):
+    ok: bool
+    card_id: int
+    fetched_count: int
+    failed_count: int
+    latest_price: Optional[PriceHistoryRead] = None
+    results: list[PriceFetchResultRead]
+    error: Optional[str] = None
+    message: Optional[str] = None
+
+
+class PriceLatestResponse(SQLModel):
+    ok: bool
+    card_id: int
+    owned_card_id: Optional[int] = None
+    latest: Optional[PriceHistoryRead] = None
+    error: Optional[str] = None
+    message: Optional[str] = None
+
+
+class PriceHistoryResponse(SQLModel):
+    ok: bool
+    card_id: int
+    latest: Optional[PriceHistoryRead] = None
+    history: list[PriceHistoryRead]
+
+
+class PriceRefreshResponse(SQLModel):
+    ok: bool
+    cards_checked: int
+    success_count: int
+    failure_count: int
+    started_at: datetime
+    finished_at: datetime
+    message: Optional[str] = None
+
+
+class CollectionValuationRead(SQLModel):
+    ok: bool
+    currency: str
+    total_value_huf: float
+    raw_value_huf: float
+    graded_value_huf: float
+    owned_cards_count: int
+    unique_cards_count: int
+    missing_price_cards: int
+    price_change_24h_huf: Optional[float] = None
+    price_change_7d_huf: Optional[float] = None
+    latest_refresh_at: Optional[datetime] = None
+
+
 class CollectionSummaryRead(SQLModel):
     total_cards: int
     unique_cards: int

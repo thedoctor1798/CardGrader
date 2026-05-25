@@ -14,6 +14,7 @@ from ..models import (
     CenteringMeasurement,
     CollectionSnapshot,
     OwnedCard,
+    PriceHistory,
     PriceObservation,
 )
 
@@ -105,6 +106,7 @@ def reset_local_data(session: Session = Depends(get_session)):
         "centering_measurements": delete_all_rows(session, CenteringMeasurement),
         "analysis_runs": delete_all_rows(session, AnalysisRun),
         "card_media": delete_all_rows(session, CardMedia),
+        "price_history": delete_all_rows(session, PriceHistory),
         "price_observations": delete_all_rows(session, PriceObservation),
         "collection_snapshots": delete_all_rows(session, CollectionSnapshot),
         "owned_cards": delete_all_rows(session, OwnedCard),

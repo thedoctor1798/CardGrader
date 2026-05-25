@@ -18,11 +18,14 @@ from ..config import (
     LOCAL_AI_TIMEOUT_SECONDS,
     LOCAL_AI_WORKER_BASE_URL,
     MEDIA_DIR,
+    PRICE_FETCH_AFTER_RECOGNITION,
     ROOT,
 )
 from ..models import Card, CardMedia, OwnedCard, RecognitionAttempt, RecognitionCandidate
 from ..models.core import utc_now
+from ..schemas.prices import PriceFetchRequest
 from .local_ai import LocalAIHTTPError, http_json, remote_worker_headers
+from .price_service import fetch_prices_for_card
 
 
 def safe_media_path(media: CardMedia) -> Path:
@@ -456,6 +459,15 @@ def accept_recognition_candidate(
     session.add(attempt)
     session.commit()
     session.refresh(owned_card)
+    if PRICE_FETCH_AFTER_RECOGNITION:
+        try:
+            fetch_prices_for_card(
+                session,
+                card.id,
+                PriceFetchRequest(owned_card_id=owned_card.id),
+            )
+        except Exception as exc:  # noqa: BLE001 - recognition accept should not fail on optional pricing
+            print(f"Price fetch after recognition failed owned_card_id={owned_card.id}: {exc}")
     print("Card recognition accepted", {"attempt_id": attempt.id, "catalog_card_id": card.id, "owned_card_id": owned_card.id})
     return {
         "ok": True,

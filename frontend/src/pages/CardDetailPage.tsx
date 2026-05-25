@@ -1,6 +1,7 @@
 import { Crop, Play, RefreshCw, RotateCcw, Save, Upload, X } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent, ReactNode, WheelEvent } from "react";
+import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api, mediaUrl } from "../api/client";
 import type {
   AnalysisAsset,
@@ -14,6 +15,7 @@ import type {
   LocalAIDebugSingleImageResponse,
   LocalAIStatus,
   OwnedCard,
+  PriceHistoryEntry,
   PriceObservation,
   RemoteAIGradeResponse,
   RemoteAIWorkerResult,
@@ -46,12 +48,16 @@ type CardDetailPageProps = {
 };
 
 type PriceForm = {
-  raw_price_huf: string;
-  psa_8_price_huf: string;
-  psa_9_price_huf: string;
-  psa_10_price_huf: string;
+  raw_price: string;
+  market_price: string;
+  psa_7: string;
+  psa_8: string;
+  psa_9: string;
+  psa_10: string;
+  currency: string;
   price_confidence: string;
-  notes: string;
+  condition_hint: string;
+  source_url: string;
 };
 
 type OwnedEditForm = {
@@ -78,12 +84,16 @@ type WorkOverlayState = {
 };
 
 const emptyPriceForm: PriceForm = {
-  raw_price_huf: "",
-  psa_8_price_huf: "",
-  psa_9_price_huf: "",
-  psa_10_price_huf: "",
-  price_confidence: "0.5",
-  notes: "",
+  raw_price: "",
+  market_price: "",
+  psa_7: "",
+  psa_8: "",
+  psa_9: "",
+  psa_10: "",
+  currency: "HUF",
+  price_confidence: "manual",
+  condition_hint: "",
+  source_url: "",
 };
 
 function editFormFromOwnedCard(ownedCard: OwnedCard | null): OwnedEditForm {
@@ -97,15 +107,59 @@ function editFormFromOwnedCard(ownedCard: OwnedCard | null): OwnedEditForm {
   };
 }
 
-function formFromPrice(price: PriceObservation | null): PriceForm {
+function formFromPrice(price: PriceHistoryEntry | null): PriceForm {
   if (!price) return emptyPriceForm;
   return {
-    raw_price_huf: price.raw_price_huf?.toString() ?? "",
-    psa_8_price_huf: price.psa_8_price_huf?.toString() ?? "",
-    psa_9_price_huf: price.psa_9_price_huf?.toString() ?? "",
-    psa_10_price_huf: price.psa_10_price_huf?.toString() ?? "",
-    price_confidence: price.price_confidence?.toString() ?? "0.5",
-    notes: "",
+    raw_price: price.raw_price?.toString() ?? "",
+    market_price: price.market_price?.toString() ?? "",
+    psa_7: price.psa_7?.toString() ?? "",
+    psa_8: price.psa_8?.toString() ?? "",
+    psa_9: price.psa_9?.toString() ?? "",
+    psa_10: price.psa_10?.toString() ?? "",
+    currency: price.currency ?? "HUF",
+    price_confidence: price.confidence ?? "manual",
+    condition_hint: price.condition_hint ?? "",
+    source_url: price.source_url ?? "",
+  };
+}
+
+function priceValueHuf(price: PriceHistoryEntry | null, key: "raw" | "market" | "psa_7" | "psa_8" | "psa_9" | "psa_10"): number | null {
+  if (!price) return null;
+  const convertedKey = key === "raw" || key === "market" ? `converted_${key}_price` : `converted_${key}`;
+  const converted = price[convertedKey as keyof PriceHistoryEntry];
+  if (typeof converted === "number") return converted;
+  if (price.currency === "HUF") {
+    const value = key === "raw" ? price.raw_price : key === "market" ? price.market_price : price[key];
+    return value ?? null;
+  }
+  return null;
+}
+
+function legacyPriceToHistory(price: PriceObservation, ownedCardId: number): PriceHistoryEntry {
+  return {
+    id: -price.id,
+    card_id: price.card_id,
+    owned_card_id: ownedCardId,
+    source: price.source_name ?? "legacy",
+    raw_price: price.raw_price_huf,
+    market_price: price.raw_price_huf,
+    psa_7: price.psa_7_price_huf,
+    psa_8: price.psa_8_price_huf,
+    psa_9: price.psa_9_price_huf,
+    psa_10: price.psa_10_price_huf,
+    currency: "HUF",
+    converted_currency: "HUF",
+    converted_raw_price: price.raw_price_huf,
+    converted_market_price: price.raw_price_huf,
+    converted_psa_7: price.psa_7_price_huf,
+    converted_psa_8: price.psa_8_price_huf,
+    converted_psa_9: price.psa_9_price_huf,
+    converted_psa_10: price.psa_10_price_huf,
+    confidence: price.price_confidence?.toString() ?? null,
+    condition_hint: price.notes ?? null,
+    fetched_at: price.observed_at,
+    created_at: price.observed_at,
+    updated_at: price.observed_at,
   };
 }
 
@@ -377,7 +431,8 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const [ownedCard, setOwnedCard] = useState<OwnedCard | null>(null);
   const [card, setCard] = useState<Card | null>(null);
   const [media, setMedia] = useState<CardMedia[]>([]);
-  const [latestPrice, setLatestPrice] = useState<PriceObservation | null>(null);
+  const [latestPrice, setLatestPrice] = useState<PriceHistoryEntry | null>(null);
+  const [priceHistory, setPriceHistory] = useState<PriceHistoryEntry[]>([]);
   const [latestCentering, setLatestCentering] = useState<CenteringMeasurement | null>(null);
   const [centeringMeasurements, setCenteringMeasurements] = useState<CenteringMeasurement[]>([]);
   const [analysisRuns, setAnalysisRuns] = useState<AnalysisRun[]>([]);
@@ -421,6 +476,17 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
         : !localAI.reachable
           ? localAI.mode === "server_local" ? "LM Studio nem érhető el." : "Local AI worker nem érhető el."
           : null;
+  const priceChartData = useMemo(
+    () =>
+      priceHistory
+        .filter((item) => !item.error_code)
+        .map((item) => ({
+          fetched_at: item.fetched_at,
+          raw_market_huf: priceValueHuf(item, "market") ?? priceValueHuf(item, "raw"),
+          psa_10_huf: priceValueHuf(item, "psa_10"),
+        })),
+    [priceHistory],
+  );
 
   const setScopedSuccess = (scope: NoticeScope, text: string) => setNotice({ scope, tone: "success", text });
   const setScopedError = (scope: NoticeScope, text: string) => setNotice({ scope, tone: "error", text });
@@ -459,11 +525,25 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
       setAnalysisRuns(runsData);
 
       try {
-        const price = await api.getLatestOwnedCardPrice(ownedCardId);
-        setLatestPrice(price);
-        setPriceForm(formFromPrice(price));
+        const [price, history] = await Promise.all([
+          api.getLatestOwnedCardPriceHistory(ownedCardId),
+          api.getPriceHistory(owned.card_id),
+        ]);
+        let latest = price.latest ?? history.latest ?? null;
+        let historyItems = history.history;
+        if (!latest) {
+          const legacyPrice = await api.getLatestOwnedCardPrice(ownedCardId);
+          if (legacyPrice) {
+            latest = legacyPriceToHistory(legacyPrice, ownedCardId);
+            historyItems = [latest];
+          }
+        }
+        setLatestPrice(latest);
+        setPriceHistory(historyItems);
+        setPriceForm(formFromPrice(latest));
       } catch {
         setLatestPrice(null);
+        setPriceHistory([]);
         setPriceForm(emptyPriceForm);
       }
 
@@ -612,22 +692,46 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
     setBusyLabel("Ár mentése...");
     setNotice(null);
     try {
-      const saved = await api.createPrice(ownedCard.card_id, {
-        source_name: "manual",
-        currency: "HUF",
-        raw_price_huf: optionalNumber(priceForm.raw_price_huf),
-        psa_8_price_huf: optionalNumber(priceForm.psa_8_price_huf),
-        psa_9_price_huf: optionalNumber(priceForm.psa_9_price_huf),
-        psa_10_price_huf: optionalNumber(priceForm.psa_10_price_huf),
-        price_confidence: optionalNumber(priceForm.price_confidence) ?? 0.5,
-        notes: priceForm.notes.trim() || null,
+      const saved = await api.createManualPrice({
+        card_id: ownedCard.card_id,
+        owned_card_id: ownedCard.id,
+        raw_price: optionalNumber(priceForm.raw_price),
+        market_price: optionalNumber(priceForm.market_price),
+        psa_7: optionalNumber(priceForm.psa_7),
+        psa_8: optionalNumber(priceForm.psa_8),
+        psa_9: optionalNumber(priceForm.psa_9),
+        psa_10: optionalNumber(priceForm.psa_10),
+        currency: priceForm.currency.trim().toUpperCase() || "HUF",
+        confidence: priceForm.price_confidence.trim() || "manual",
+        condition_hint: priceForm.condition_hint.trim() || null,
+        source_url: priceForm.source_url.trim() || null,
       });
       setLatestPrice(saved);
+      setPriceHistory((current) => [...current, saved].sort((a, b) => new Date(a.fetched_at).getTime() - new Date(b.fetched_at).getTime()));
       setPriceForm(formFromPrice(saved));
       if (latestAnalysis) await loadReport(latestAnalysis.id);
       setScopedSuccess("price", "Ár mentve.");
     } catch (err) {
       setScopedError("price", err instanceof Error ? err.message : "Ár mentési hiba");
+    } finally {
+      setBusyLabel(null);
+    }
+  };
+
+  const fetchLatestPrice = async () => {
+    if (!ownedCard) return;
+    setBusyLabel("Ár frissítése...");
+    setNotice(null);
+    try {
+      const result = await api.fetchCardPrices(ownedCard.card_id, { owned_card_id: ownedCard.id });
+      await load(false);
+      if (result.ok) {
+        setScopedSuccess("price", `Árfrissítés kész: ${result.fetched_count} sikeres forrás.`);
+      } else {
+        setScopedError("price", result.message || "Nem érkezett használható árforrásból adat.");
+      }
+    } catch (err) {
+      setScopedError("price", err instanceof Error ? err.message : "Árfrissítési hiba");
     } finally {
       setBusyLabel(null);
     }
@@ -1028,35 +1132,84 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
             onSave={saveDerivedMedia}
           />
 
-          <Panel title="Ár precheck">
+          <Panel
+            title="Ár és értékelés"
+            subtitle="Legutóbbi raw/graded árak a backend price_history táblából."
+            action={
+              <button
+                className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 px-3 py-2 text-sm font-medium text-emerald-100 hover:bg-emerald-500/10 disabled:opacity-60"
+                disabled={busy}
+                onClick={fetchLatestPrice}
+                type="button"
+              >
+                <RefreshCw size={16} />
+                Ár frissítése
+              </button>
+            }
+          >
             {latestPrice ? (
-              <div className="grid grid-cols-2 gap-2">
-                <StatCard label="Raw ár" value={formatHuf(latestPrice.raw_price_huf)} />
-                <StatCard label="PSA 8" value={formatHuf(latestPrice.psa_8_price_huf)} />
-                <StatCard label="PSA 9" value={formatHuf(latestPrice.psa_9_price_huf)} />
-                <StatCard label="PSA 10" value={formatHuf(latestPrice.psa_10_price_huf)} />
-                <StatCard label="Confidence" value={formatNumber(latestPrice.price_confidence, 2)} />
+              <div className="space-y-4">
+                <div className="grid grid-cols-2 gap-2">
+                  <StatCard label="Raw ár" value={formatHuf(priceValueHuf(latestPrice, "raw"))} />
+                  <StatCard label="Market ár" value={formatHuf(priceValueHuf(latestPrice, "market"))} />
+                  <StatCard label="PSA 7" value={formatHuf(priceValueHuf(latestPrice, "psa_7"))} />
+                  <StatCard label="PSA 8" value={formatHuf(priceValueHuf(latestPrice, "psa_8"))} />
+                  <StatCard label="PSA 9" value={formatHuf(priceValueHuf(latestPrice, "psa_9"))} />
+                  <StatCard label="PSA 10" value={formatHuf(priceValueHuf(latestPrice, "psa_10"))} />
+                </div>
+                <div className="grid grid-cols-2 gap-2 text-xs text-slate-400">
+                  <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">Forrás: <span className="text-slate-100">{latestPrice.source}</span></div>
+                  <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">Confidence: <span className="text-slate-100">{latestPrice.confidence ?? "-"}</span></div>
+                  <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">Pénznem: <span className="text-slate-100">{latestPrice.currency}</span></div>
+                  <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">Frissítve: <span className="text-slate-100">{formatDate(latestPrice.fetched_at)}</span></div>
+                </div>
               </div>
             ) : (
               <EmptyState label="Még nincs ár rögzítve." />
             )}
+            <InlineNotice notice={notice} scope="price" />
           </Panel>
 
-          <Panel title="Manuális ár rögzítése">
+          <Panel title="Ártörténet" subtitle="Raw/market és PSA 10 trend a mentett price_history alapján.">
+            {priceChartData.length === 0 ? (
+              <EmptyState label="Még nincs ártörténet." />
+            ) : (
+              <div className="h-72">
+                <ResponsiveContainer width="100%" height="100%">
+                  <LineChart data={priceChartData}>
+                    <CartesianGrid stroke="#1f2937" strokeDasharray="3 3" />
+                    <XAxis dataKey="fetched_at" tickFormatter={formatDate} stroke="#94a3b8" />
+                    <YAxis stroke="#94a3b8" tickFormatter={(value) => `${Math.round(Number(value) / 1000)}k`} />
+                    <Tooltip
+                      contentStyle={{ background: "#111722", border: "1px solid #334155", borderRadius: 8 }}
+                      formatter={(value) => formatHuf(Number(value))}
+                      labelFormatter={(value) => formatDate(String(value))}
+                    />
+                    <Line dataKey="raw_market_huf" name="Raw/market" stroke="#60a5fa" strokeWidth={2} type="monotone" connectNulls />
+                    <Line dataKey="psa_10_huf" name="PSA 10" stroke="#34d399" strokeWidth={2} type="monotone" connectNulls />
+                  </LineChart>
+                </ResponsiveContainer>
+              </div>
+            )}
+          </Panel>
+
+          <Panel title="Manuális ár hozzáadása">
             <form className="space-y-3" onSubmit={handlePriceSubmit}>
               <div className="grid grid-cols-2 gap-3">
-                <FieldLabel label="Raw ár"><input className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" inputMode="decimal" placeholder="pl. 8000" value={priceForm.raw_price_huf} onChange={(event) => setPriceForm({ ...priceForm, raw_price_huf: event.target.value })} /></FieldLabel>
-                <FieldLabel label="PSA 8 ár"><input className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" inputMode="decimal" placeholder="pl. 18000" value={priceForm.psa_8_price_huf} onChange={(event) => setPriceForm({ ...priceForm, psa_8_price_huf: event.target.value })} /></FieldLabel>
-                <FieldLabel label="PSA 9 ár"><input className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" inputMode="decimal" placeholder="pl. 28000" value={priceForm.psa_9_price_huf} onChange={(event) => setPriceForm({ ...priceForm, psa_9_price_huf: event.target.value })} /></FieldLabel>
-                <FieldLabel label="PSA 10 ár"><input className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" inputMode="decimal" placeholder="pl. 65000" value={priceForm.psa_10_price_huf} onChange={(event) => setPriceForm({ ...priceForm, psa_10_price_huf: event.target.value })} /></FieldLabel>
+                <FieldLabel label="Raw ár"><input className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" inputMode="decimal" placeholder="pl. 8000" value={priceForm.raw_price} onChange={(event) => setPriceForm({ ...priceForm, raw_price: event.target.value })} /></FieldLabel>
+                <FieldLabel label="Market ár"><input className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" inputMode="decimal" placeholder="pl. 9000" value={priceForm.market_price} onChange={(event) => setPriceForm({ ...priceForm, market_price: event.target.value })} /></FieldLabel>
+                <FieldLabel label="PSA 7 ár"><input className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" inputMode="decimal" placeholder="pl. 14000" value={priceForm.psa_7} onChange={(event) => setPriceForm({ ...priceForm, psa_7: event.target.value })} /></FieldLabel>
+                <FieldLabel label="PSA 8 ár"><input className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" inputMode="decimal" placeholder="pl. 18000" value={priceForm.psa_8} onChange={(event) => setPriceForm({ ...priceForm, psa_8: event.target.value })} /></FieldLabel>
+                <FieldLabel label="PSA 9 ár"><input className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" inputMode="decimal" placeholder="pl. 28000" value={priceForm.psa_9} onChange={(event) => setPriceForm({ ...priceForm, psa_9: event.target.value })} /></FieldLabel>
+                <FieldLabel label="PSA 10 ár"><input className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" inputMode="decimal" placeholder="pl. 65000" value={priceForm.psa_10} onChange={(event) => setPriceForm({ ...priceForm, psa_10: event.target.value })} /></FieldLabel>
               </div>
-              <FieldLabel label="Confidence">
-                <input className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" inputMode="decimal" placeholder="pl. 0,7" value={priceForm.price_confidence} onChange={(event) => setPriceForm({ ...priceForm, price_confidence: event.target.value })} />
-              </FieldLabel>
-              <FieldLabel label="Megjegyzés">
-                <textarea className="min-h-20 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" placeholder="pl. lokális manuális becslés" value={priceForm.notes} onChange={(event) => setPriceForm({ ...priceForm, notes: event.target.value })} />
-              </FieldLabel>
-              <button className="w-full rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60" disabled={busy} type="submit">Ár mentése</button>
+              <div className="grid grid-cols-2 gap-3">
+                <FieldLabel label="Pénznem"><select className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" value={priceForm.currency} onChange={(event) => setPriceForm({ ...priceForm, currency: event.target.value })}><option>HUF</option><option>EUR</option><option>USD</option></select></FieldLabel>
+                <FieldLabel label="Confidence"><input className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" placeholder="manual / medium / high" value={priceForm.price_confidence} onChange={(event) => setPriceForm({ ...priceForm, price_confidence: event.target.value })} /></FieldLabel>
+              </div>
+              <FieldLabel label="Condition hint"><input className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" placeholder="pl. raw near mint" value={priceForm.condition_hint} onChange={(event) => setPriceForm({ ...priceForm, condition_hint: event.target.value })} /></FieldLabel>
+              <FieldLabel label="Source URL"><input className="w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100" placeholder="opcionális" value={priceForm.source_url} onChange={(event) => setPriceForm({ ...priceForm, source_url: event.target.value })} /></FieldLabel>
+              <button className="w-full rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60" disabled={busy} type="submit">Manuális ár hozzáadása</button>
               <InlineNotice notice={notice} scope="price" />
             </form>
           </Panel>

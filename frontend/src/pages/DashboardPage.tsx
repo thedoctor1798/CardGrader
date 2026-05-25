@@ -2,7 +2,7 @@ import { Camera, RefreshCw } from "lucide-react";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import { Area, AreaChart, CartesianGrid, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
 import { api } from "../api/client";
-import type { CollectionSnapshot, CollectionSummary } from "../api/types";
+import type { CollectionSnapshot, CollectionSummary, CollectionValuation } from "../api/types";
 import { EmptyState } from "../components/EmptyState";
 import { GlobalLoadingOverlay } from "../components/GlobalLoadingOverlay";
 import { LoadingState } from "../components/LoadingState";
@@ -12,6 +12,7 @@ import { formatDate, formatHuf } from "../utils/format";
 
 export function DashboardPage() {
   const [summary, setSummary] = useState<CollectionSummary | null>(null);
+  const [valuation, setValuation] = useState<CollectionValuation | null>(null);
   const [snapshots, setSnapshots] = useState<CollectionSnapshot[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -23,11 +24,13 @@ export function DashboardPage() {
   const load = useCallback(async (showPageLoading = true) => {
     if (showPageLoading) setLoading(true);
     try {
-      const [summaryData, snapshotData] = await Promise.all([
+      const [summaryData, snapshotData, valuationData] = await Promise.all([
         api.getCollectionSummary(),
         api.getCollectionSnapshots(),
+        api.getCollectionValuation(),
       ]);
       setSummary(summaryData);
+      setValuation(valuationData);
       setSnapshots(snapshotData.slice().reverse());
       setError(null);
     } catch (err) {
@@ -50,6 +53,20 @@ export function DashboardPage() {
       setMessage("Snapshot mentve.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Snapshot mentési hiba");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const refreshOwnedPrices = async () => {
+    setBusy(true);
+    setMessage(null);
+    try {
+      const result = await api.refreshOwnedPrices();
+      await load(false);
+      setMessage(`Árfrissítés kész: ${result.success_count} sikeres, ${result.failure_count} sikertelen.`);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Árfrissítési hiba");
     } finally {
       setBusy(false);
     }
@@ -80,6 +97,15 @@ export function DashboardPage() {
             Frissítés
           </button>
           <button
+            className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 px-3 py-2 text-sm text-emerald-100 hover:bg-emerald-500/10 disabled:opacity-60"
+            disabled={busy}
+            onClick={refreshOwnedPrices}
+            type="button"
+          >
+            <RefreshCw size={16} />
+            Árak frissítése
+          </button>
+          <button
             className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white hover:bg-blue-400 disabled:opacity-60"
             disabled={busy}
             onClick={createSnapshot}
@@ -102,20 +128,25 @@ export function DashboardPage() {
       )}
 
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
-        <StatCard label="Összesített érték" value={formatHuf(summary.collection_value_huf)} tone="good" />
+        <StatCard label="Összesített érték" value={formatHuf(valuation?.total_value_huf ?? summary.collection_value_huf)} tone="good" />
         <StatCard label="Bekerülési költség" value={formatHuf(summary.cost_basis_huf)} />
         <StatCard
           label="Becsült profit"
-          value={formatHuf(summary.unrealized_profit_huf)}
-          tone={summary.unrealized_profit_huf >= 0 ? "good" : "bad"}
+          value={formatHuf((valuation?.total_value_huf ?? summary.collection_value_huf) - summary.cost_basis_huf)}
+          tone={(valuation?.total_value_huf ?? summary.collection_value_huf) - summary.cost_basis_huf >= 0 ? "good" : "bad"}
         />
         <StatCard label="Kártyák száma" value={summary.total_cards} />
         <StatCard label="Egyedi kártyák" value={summary.unique_cards} />
         <StatCard
           label="Hiányzó árak"
-          value={summary.cards_missing_price_total}
-          tone={summary.cards_missing_price_total > 0 ? "warn" : "good"}
+          value={valuation?.missing_price_cards ?? summary.cards_missing_price_total}
+          tone={(valuation?.missing_price_cards ?? summary.cards_missing_price_total) > 0 ? "warn" : "good"}
         />
+        <StatCard label="Raw érték" value={formatHuf(valuation?.raw_value_huf)} />
+        <StatCard label="Graded érték" value={formatHuf(valuation?.graded_value_huf)} />
+        <StatCard label="24h változás" value={formatHuf(valuation?.price_change_24h_huf)} tone={(valuation?.price_change_24h_huf ?? 0) >= 0 ? "good" : "bad"} />
+        <StatCard label="7d változás" value={formatHuf(valuation?.price_change_7d_huf)} tone={(valuation?.price_change_7d_huf ?? 0) >= 0 ? "good" : "bad"} />
+        <StatCard label="Utolsó árfrissítés" value={formatDate(valuation?.latest_refresh_at)} />
       </div>
 
       <Panel
