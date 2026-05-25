@@ -3,22 +3,15 @@ from fastapi.middleware.cors import CORSMiddleware
 from .routers import analysis, cards, centering, collection, demo, health, local_ai, media, owned_cards, prices, recognition
 from .database import init_db
 from .utils.files import ensure_app_dirs
-from .config import APP_MODE, DATABASE_URL, HOST, LOCAL_AI_ENABLED, MEDIA_DIR, PORT
+from .config import APP_MODE, CORS_ORIGINS, DATABASE_URL, HOST, LOCAL_AI_ENABLED, MEDIA_DIR, PORT
 
 app = FastAPI(title="CardGrader AI Local Edition")
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=[
-        "http://127.0.0.1:5173",
-        "http://localhost:5173",
-        "http://127.0.0.1:5174",
-        "http://localhost:5174",
-        "http://127.0.0.1:8710",
-        "http://localhost:8710",
-    ],
+    allow_origins=CORS_ORIGINS,
     allow_credentials=True,
-    allow_methods=["*"],
+    allow_methods=["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["*"],
 )
 

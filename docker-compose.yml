@@ -15,6 +15,7 @@ services:
       MEDIA_DIR: "${MEDIA_DIR:-/app/media}"
       CATALOG_DIR: "${CATALOG_DIR:-/app/catalog}"
       LOG_DIR: "${LOG_DIR:-/app/logs}"
+      CORS_ORIGINS: "${CORS_ORIGINS:-http://localhost:5173,http://127.0.0.1:5173,http://localhost:8711,http://127.0.0.1:8711}"
       LOCAL_AI_MODE: "${LOCAL_AI_MODE:-remote_worker}"
       LOCAL_AI_WORKER_BASE_URL: "${LOCAL_AI_WORKER_BASE_URL:-http://YOUR-WINDOWS-TAILSCALE-IP:8765}"
       LOCAL_AI_TIMEOUT_SECONDS: "${LOCAL_AI_TIMEOUT_SECONDS:-300}"
@@ -53,7 +54,7 @@ services:
       cardgrader-backend:
         condition: service_healthy
     ports:
-      - "${FRONTEND_PORT:-8080}:80"
+      - "${FRONTEND_PORT:-8711}:80"
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://127.0.0.1/"]
       interval: 30s

@@ -49,6 +49,21 @@ def get_path_env(name: str, default: Path) -> Path:
     return path
 
 
+DEFAULT_CORS_ORIGINS = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+    "http://localhost:8711",
+    "http://127.0.0.1:8711",
+]
+
+
+def get_csv_env(name: str, default: list[str]) -> list[str]:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return [item.strip() for item in value.split(",") if item.strip()]
+
+
 APP_MODE = os.getenv("APP_MODE", "local").strip().lower() or "local"
 HOST = os.getenv("HOST", "127.0.0.1")
 PORT = get_int_env("PORT", 8710)
@@ -57,6 +72,7 @@ MEDIA_DIR = get_path_env("MEDIA_DIR", ROOT / "media")
 CATALOG_DIR = get_path_env("CATALOG_DIR", ROOT / "catalog")
 LOG_DIR = get_path_env("LOG_DIR", ROOT / "logs")
 DATABASE_URL = os.getenv("DATABASE_URL", f"sqlite:///{(DATA_DIR / 'cardgrader.db').as_posix()}")
+CORS_ORIGINS = get_csv_env("CORS_ORIGINS", DEFAULT_CORS_ORIGINS)
 
 
 LOCAL_AI_MODES = {"disabled", "server_local", "remote_worker"}

@@ -77,10 +77,16 @@ sudo chown -R "$(id -u):$(id -g)" data media catalog logs
 Edit `.env.server`:
 
 ```text
+FRONTEND_PORT=8711
+BACKEND_PORT=8710
+VITE_API_BASE_URL=http://<SERVER_IP_OR_HOSTNAME>:8710
+CORS_ORIGINS=http://<SERVER_IP_OR_HOSTNAME>:8711,http://lajos-server:8711,http://localhost:8711,http://127.0.0.1:8711
 LOCAL_AI_MODE=remote_worker
 LOCAL_AI_WORKER_BASE_URL=http://<TAILSCALE_CLIENT_IP_OR_HOSTNAME>:<PORT>
 LOCAL_AI_MODEL_NAME=<your-local-vision-model>
 ```
+
+`CORS_ORIGINS` must include the exact frontend origin users open in the browser. For example, if users open `http://192.168.1.103:8711`, include `http://192.168.1.103:8711`; if you later use a domain, add that domain origin too.
 
 Start the stack:
 
@@ -94,12 +100,12 @@ Check status:
 docker compose ps
 docker compose logs -f cardgrader-backend
 curl http://127.0.0.1:8710/api/health
-curl http://127.0.0.1:8080/
+curl http://127.0.0.1:8711/
 ```
 
 Default published ports:
 
-- Frontend nginx: `http://SERVER_IP:8080`
+- Frontend nginx: `http://SERVER_IP:8711`
 - Backend API: `http://SERVER_IP:8710`
 
 Persistent server folders:
@@ -109,7 +115,36 @@ Persistent server folders:
 - `./catalog:/app/catalog`
 - `./logs:/app/logs`
 
-The frontend container serves the Vite production build with nginx and proxies `/api` and `/media` to the backend container. In production, `VITE_API_BASE_URL` can stay empty so browser requests use the same host that served the frontend.
+The frontend container serves the Vite production build with nginx and proxies `/api` and `/media` to the backend container. If `VITE_API_BASE_URL` is empty, browser requests use the same host that served the frontend. If `VITE_API_BASE_URL` points directly at the backend, for example `http://192.168.1.103:8710`, make sure `CORS_ORIGINS` includes the frontend URL, for example `http://192.168.1.103:8711`.
+
+### Server CORS Troubleshooting
+
+Symptom: the frontend loads, but dashboard or collection requests show `Failed to fetch`. The browser console shows CORS blocked requests, and backend logs show `OPTIONS` requests returning `400`.
+
+Fix: set `CORS_ORIGINS` in `.env.server` to include the frontend URL users open in the browser, for example:
+
+```text
+CORS_ORIGINS=http://192.168.1.103:8711,http://lajos-server:8711
+```
+
+Then rebuild and restart:
+
+```bash
+docker compose --env-file .env.server down
+docker compose --env-file .env.server up -d --build
+```
+
+Verify the deployed config, health, and preflight response:
+
+```bash
+docker compose --env-file .env.server config | grep -E "CORS_ORIGINS|VITE_API_BASE_URL|published"
+curl http://localhost:8710/api/health
+curl -i -X OPTIONS "http://192.168.1.103:8710/api/cards" \
+  -H "Origin: http://192.168.1.103:8711" \
+  -H "Access-Control-Request-Method: GET"
+```
+
+Expected: the response does not return `400` and includes `Access-Control-Allow-Origin: http://192.168.1.103:8711`.
 
 ### Tailscale And Remote Local AI
 
