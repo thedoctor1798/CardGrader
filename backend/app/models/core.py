@@ -44,7 +44,7 @@ class CardMedia(SQLModel, table=True):
     __tablename__ = "card_media"
 
     id: Optional[int] = Field(default=None, primary_key=True)
-    owned_card_id: int = Field(foreign_key="owned_cards.id")
+    owned_card_id: Optional[int] = Field(default=None, foreign_key="owned_cards.id")
     media_type: Optional[str] = None
     label: Optional[str] = None
     file_path: str

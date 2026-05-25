@@ -28,7 +28,7 @@ export type OwnedCard = {
 
 export type CardMedia = {
   id: number;
-  owned_card_id: number;
+  owned_card_id?: number | null;
   media_type: string;
   label: string;
   file_path: string;
@@ -40,6 +40,13 @@ export type CardMedia = {
   edit_type?: string | null;
   edit_metadata?: string | null;
   created_at: string;
+};
+
+export type MediaUploadResponse = {
+  ok: boolean;
+  media: CardMedia;
+  filename?: string | null;
+  content_type?: string | null;
 };
 
 export type DerivedMediaCreate = {
@@ -539,6 +546,7 @@ export type RecognitionCandidate = {
   card_number?: string | null;
   rarity?: string | null;
   language?: string | null;
+  thumbnail_file_path?: string | null;
   match_reasons: string[];
   name_score?: number | null;
   number_score?: number | null;

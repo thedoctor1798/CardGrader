@@ -296,6 +296,7 @@ def candidate_read(session: Session, candidate: RecognitionCandidate) -> dict[st
         "card_number": card.card_number if card else None,
         "rarity": card.rarity if card else None,
         "language": card.language if card else None,
+        "thumbnail_file_path": candidate_thumbnail_file_path(session, candidate.catalog_card_id),
         "match_reasons": reasons,
         "name_score": candidate.name_score,
         "number_score": candidate.number_score,
@@ -303,6 +304,20 @@ def candidate_read(session: Session, candidate: RecognitionCandidate) -> dict[st
         "rarity_score": candidate.rarity_score,
         "language_score": candidate.language_score,
     }
+
+
+def candidate_thumbnail_file_path(session: Session, card_id: int) -> str | None:
+    owned_cards = session.exec(select(OwnedCard.id).where(OwnedCard.card_id == card_id)).all()
+    owned_ids = [owned_id for owned_id in owned_cards if owned_id is not None]
+    if not owned_ids:
+        return None
+    media = session.exec(
+        select(CardMedia)
+        .where(CardMedia.owned_card_id.in_(owned_ids))
+        .where(CardMedia.media_type == "image")
+        .order_by((CardMedia.label == "front").desc(), CardMedia.created_at.desc(), CardMedia.id.desc())
+    ).first()
+    return media.file_path if media is not None else None
 
 
 def call_remote_recognition_worker(media: CardMedia) -> dict[str, Any]:

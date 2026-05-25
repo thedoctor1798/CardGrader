@@ -15,6 +15,7 @@ import type {
   CollectionValuation,
   DemoSeedResponse,
   LocalAIStatus,
+  MediaUploadResponse,
   LocalAIAnalysisResponse,
   LocalAIConfig,
   LocalAIDebugSingleImageResponse,
@@ -113,6 +114,12 @@ export const api = {
     body.append("label", label);
     body.append("file", file);
     return request<CardMedia>(`/api/owned-cards/${ownedCardId}/media`, { method: "POST", body });
+  },
+  uploadRecognitionMedia: (file: File, label = "front") => {
+    const body = new FormData();
+    body.append("label", label);
+    body.append("file", file);
+    return request<MediaUploadResponse>("/api/media/upload", { method: "POST", body });
   },
   createDerivedMedia: (mediaId: number, body: DerivedMediaCreate) =>
     request<CardMedia>(`/api/media/${mediaId}/derive`, { method: "POST", body: JSON.stringify(body) }),

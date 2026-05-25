@@ -11,7 +11,7 @@ from sqlmodel import Session, select
 from ..config import MEDIA_DIR, ROOT
 from ..database import get_session
 from ..models import CardMedia, OwnedCard
-from ..schemas import CardMediaRead, DerivedMediaCreate
+from ..schemas import CardMediaRead, DerivedMediaCreate, MediaUploadResponse
 
 router = APIRouter()
 
@@ -201,6 +201,50 @@ async def upload_owned_card_media(
     return media
 
 
+@router.post("/api/media/upload", response_model=MediaUploadResponse, status_code=201)
+async def upload_unlinked_media(
+    file: UploadFile = File(...),
+    label: str = Form(default="front"),
+    media_type: Optional[str] = Form(default=None),
+    session: Session = Depends(get_session),
+):
+    normalized_label = label.strip().lower() or "front"
+    if normalized_label not in ALLOWED_LABELS:
+        raise HTTPException(status_code=400, detail="Unsupported media label")
+
+    original_filename = Path(file.filename or "").name
+    extension = Path(original_filename).suffix.lower()
+    normalized_media_type = validate_media_type(extension, media_type)
+    if normalized_media_type != "image":
+        raise HTTPException(status_code=400, detail="Image-first recognition only supports image uploads")
+
+    filename = f"{normalized_label}_{uuid4().hex}{extension}"
+    destination = MEDIA_DIR / "originals" / "unlinked" / filename
+
+    file_size = await save_upload(file, destination)
+    width, height = read_image_size(destination)
+
+    media = CardMedia(
+        owned_card_id=None,
+        media_type=normalized_media_type,
+        label=normalized_label,
+        file_path=relative_to_root(destination),
+        original_filename=original_filename,
+        width=width,
+        height=height,
+        file_size_bytes=file_size,
+    )
+    session.add(media)
+    session.commit()
+    session.refresh(media)
+    return {
+        "ok": True,
+        "media": media,
+        "filename": original_filename,
+        "content_type": file.content_type,
+    }
+
+
 @router.get("/api/owned-cards/{owned_card_id}/media", response_model=List[CardMediaRead])
 def list_owned_card_media(
     owned_card_id: int,
@@ -237,7 +281,8 @@ def create_derived_media(
         raise HTTPException(status_code=404, detail="Source media file not found")
 
     edited = apply_manual_edits(source_path, payload)
-    destination = MEDIA_DIR / "derived" / str(source.owned_card_id) / f"{derived_label(source, payload)}_{uuid4().hex}.jpg"
+    owner_folder = str(source.owned_card_id) if source.owned_card_id is not None else "unlinked"
+    destination = MEDIA_DIR / "derived" / owner_folder / f"{derived_label(source, payload)}_{uuid4().hex}.jpg"
     destination.parent.mkdir(parents=True, exist_ok=True)
     edited.save(destination, "JPEG", quality=94)
     width, height = edited.size

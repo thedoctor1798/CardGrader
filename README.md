@@ -281,8 +281,38 @@ Frontend flow:
 - Click `Ez az` to accept and link the current owned card to that catalog card.
 - Use `Másikat választok` or `Kézi megadás` to fall back to the collection/manual flow.
 
+Image-first flow from Collection:
+
+1. Open the Collection page.
+2. Click `Kép alapján hozzáadás`.
+3. Upload a full, sharp front image of the card.
+4. Click `Kártya felismerése`.
+5. Review the extracted fields and top catalog candidates.
+6. Click `Ez az` on the correct candidate.
+7. CardGrader creates the owned card, links the uploaded media to it, and opens the owned-card detail page.
+8. Use the Phase 15.6 pricing UI on the detail page to add a manual price or click `Ár frissítése`.
+
+The image-first upload endpoint is:
+
+```text
+POST /api/media/upload
+```
+
+The frontend then calls:
+
+```text
+POST /api/media/{media_id}/recognize-card
+POST /api/recognition-attempts/{attempt_id}/accept
+```
+
 Recognition troubleshooting:
 
+- Nem látom a `Kártya felismerése` gombot: open Collection and click `Kép alapján hozzáadás`, or open an owned-card detail page with an uploaded front/back image.
+- Nincs media rekord: upload the image first; recognition runs against a saved media record.
+- No candidates found: use a full, sharp front card image, not a small crop, and check that the card exists in the local catalog.
+- AI worker unreachable: check Tailscale, the worker process, Windows Firewall, and `LOCAL_AI_WORKER_BASE_URL`.
+- LM Studio unreachable: start the LM Studio local server and verify the worker can reach it.
+- For Qwen vision models and JSON-only tasks, disable thinking/reasoning in LM Studio. Otherwise the model may produce reasoning content instead of final JSON.
 - Blurry image: upload a sharper front image where the name and collector number are visible.
 - Wrong crop/image: use the full front image, not a close-up that hides text.
 - Model cannot read small text: try a stronger vision model or a higher quality photo.

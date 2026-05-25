@@ -6,7 +6,7 @@ from .analysis import (
     AnalysisRunDetailRead,
     AnalysisRunRead,
 )
-from .cards import CardCreate, CardMediaRead, CardRead, CardUpdate, DerivedMediaCreate, OwnedCardCreate, OwnedCardRead, OwnedCardUpdate
+from .cards import CardCreate, CardMediaRead, CardRead, CardUpdate, DerivedMediaCreate, MediaUploadResponse, OwnedCardCreate, OwnedCardRead, OwnedCardUpdate
 from .centering import CenteringMeasurementCreate, CenteringMeasurementRead
 from .local_ai import LocalAIConfigRead, LocalAIStatusRead, LocalAITestConnectionRead
 from .prices import (
@@ -53,6 +53,7 @@ __all__ = [
     "LocalAIConfigRead",
     "LocalAIStatusRead",
     "LocalAITestConnectionRead",
+    "MediaUploadResponse",
     "OwnedCardCreate",
     "OwnedCardRead",
     "OwnedCardUpdate",

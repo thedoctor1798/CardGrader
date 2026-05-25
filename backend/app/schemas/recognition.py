@@ -38,6 +38,7 @@ class RecognitionCandidateRead(SQLModel):
     card_number: Optional[str] = None
     rarity: Optional[str] = None
     language: Optional[str] = None
+    thumbnail_file_path: Optional[str] = None
     match_reasons: list[str]
     name_score: Optional[float] = None
     number_score: Optional[float] = None

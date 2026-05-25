@@ -70,7 +70,7 @@ class OwnedCardRead(OwnedCardBase):
 
 class CardMediaRead(SQLModel):
     id: int
-    owned_card_id: int
+    owned_card_id: Optional[int] = None
     media_type: str
     label: str
     file_path: str
@@ -82,6 +82,13 @@ class CardMediaRead(SQLModel):
     edit_type: Optional[str] = None
     edit_metadata: Optional[str] = None
     created_at: datetime
+
+
+class MediaUploadResponse(SQLModel):
+    ok: bool
+    media: CardMediaRead
+    filename: Optional[str] = None
+    content_type: Optional[str] = None
 
 
 class DerivedMediaCreate(SQLModel):
