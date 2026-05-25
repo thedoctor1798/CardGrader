@@ -53,4 +53,8 @@ def fx_result_to_read(result: FxRateResult) -> FxRateRead:
         warning=result.warning,
         error=result.error,
         message=result.message,
+        requested_url=result.requested_url,
+        http_status=result.http_status,
+        response_content_type=result.response_content_type,
+        response_preview=result.response_preview,
     )

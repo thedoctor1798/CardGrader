@@ -190,6 +190,8 @@ class FxRate(SQLModel, table=True):
     fetched_at: datetime = Field(default_factory=utc_now, index=True)
     expires_at: datetime = Field(index=True)
     raw_response_json: Optional[str] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
@@ -222,6 +224,11 @@ class AnalysisRun(SQLModel, table=True):
     recommendation: Optional[str] = None
     recommendation_reason: Optional[str] = None
     error_message: Optional[str] = None
+    image_labels_json: Optional[str] = None
+    allowed_areas_json: Optional[str] = None
+    warnings_json: Optional[str] = None
+    model_parameters_json: Optional[str] = None
+    analysis_scope: Optional[str] = None
     created_at: datetime = Field(default_factory=utc_now)
     completed_at: Optional[datetime] = None
 

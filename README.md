@@ -342,7 +342,9 @@ PRICE_FX_USD_HUF=
 FX_CONVERSION_ENABLED=true
 FX_DEFAULT_TARGET_CURRENCY=HUF
 FX_PROVIDER=frankfurter
-FX_PROVIDER_BASE_URL=https://api.frankfurter.dev/v1
+FX_PROVIDER_BASE_URL=https://api.frankfurter.dev/v2
+FX_PROVIDER_FALLBACK_BASE_URL=https://api.frankfurter.dev/v1
+FX_USER_AGENT=CardGrader/1.0
 FX_CACHE_TTL_HOURS=12
 FX_TIMEOUT_SECONDS=15
 FX_FALLBACK_TO_STATIC_RATES=true
@@ -410,7 +412,9 @@ Default env:
 FX_CONVERSION_ENABLED=true
 FX_DEFAULT_TARGET_CURRENCY=HUF
 FX_PROVIDER=frankfurter
-FX_PROVIDER_BASE_URL=https://api.frankfurter.dev/v1
+FX_PROVIDER_BASE_URL=https://api.frankfurter.dev/v2
+FX_PROVIDER_FALLBACK_BASE_URL=https://api.frankfurter.dev/v1
+FX_USER_AGENT=CardGrader/1.0
 FX_CACHE_TTL_HOURS=12
 FX_TIMEOUT_SECONDS=15
 FX_FALLBACK_TO_STATIC_RATES=true
@@ -418,9 +422,25 @@ PRICE_FX_USD_HUF=
 PRICE_FX_EUR_HUF=
 ```
 
-When a provider stores a USD or EUR price, CardGrader fetches or reuses a cached FX rate and fills `converted_currency=HUF` plus the `converted_*` fields in `price_history`. Applied FX metadata is stored in `debug_metadata_json`, including provider, rate, rate date, fetched time, source (`frankfurter`, `cache`, `static`, or `identity`), and any warning.
+Frankfurter calls use v2 first:
+
+```text
+https://api.frankfurter.dev/v2/rates?base=USD&quotes=HUF
+```
+
+If v2 fails, CardGrader tries v1:
+
+```text
+https://api.frankfurter.dev/v1/latest?base=USD&symbols=HUF
+```
+
+Requests send `User-Agent: CardGrader/1.0` and `Accept: application/json`.
+
+When a provider stores a USD or EUR price, CardGrader fetches or reuses a cached FX rate and fills `converted_currency=HUF` plus the `converted_*` fields in `price_history`. Applied FX metadata is stored in `debug_metadata_json`, including provider, rate, rate date, fetched time, source (`frankfurter_v2`, `frankfurter_v1`, `cache`, `static`, or `identity`), and any warning.
 
 If Frankfurter is unavailable and `PRICE_FX_USD_HUF` or `PRICE_FX_EUR_HUF` is configured, CardGrader uses that static fallback. If neither a provider rate nor a static rate is available, the original USD/EUR price remains stored, HUF converted fields stay null, and valuation warns instead of faking a conversion.
+
+If Frankfurter returns HTML or a Cloudflare-style 1010 response, the backend reports `fx_provider_blocked_or_incompatible` with the requested URL, HTTP status, content type, and a short response preview. The frontend shows a Hungarian troubleshooting message instead of only displaying `error code: 1010`.
 
 FX endpoints:
 
@@ -793,14 +813,31 @@ Gamer PC responsibilities:
 - Run the CardGrader Local AI worker/bridge from `ai-worker/`.
 - Advertise only the worker endpoint through Tailscale/private networking.
 
-In `remote_worker` mode, the backend sends selected OpenCV images as base64 to the Windows worker at `/api/ai/grade`. The worker then calls localhost LM Studio and returns structured JSON.
+In `remote_worker` mode, the backend sends selected OpenCV images as base64 to the Windows worker at `/api/ai/grade`. The worker then calls localhost LM Studio and returns structured JSON. The backend validates the returned issue areas before saving findings.
 
 By default Local AI sends only:
 
 - `front_resized`
 - `back_resized`, when available
 
-Front-only analysis uses only `front_resized`. Back-only analysis uses only `back_resized`. Aggregate review combines saved JSON findings from the front/back passes and does not send images. Unreliable OpenCV corner/edge crops are excluded unless you explicitly use debug tooling.
+Front-only analysis uses only `front_resized`. Back-only analysis uses only `back_resized`. Single-image debug and front/back-only passes are marked as `Részleges elemzés`, are not treated as final grading, and do not show final PSA probability output. Aggregate review combines saved JSON findings from the front/back passes and does not send images.
+
+AI grading guardrails:
+
+- Prompts do not include example defects such as `back_top_left_corner` whitening or an example `8.5` grade.
+- The prompt includes `allowed_areas`, and every model finding must refer to one of those provided areas.
+- If the model reports a defect for an unprovided area, such as a back corner when only `front_resized` was sent, the backend removes that issue and stores `model_reported_issue_for_unprovided_area`.
+- If only one image or an incomplete image set is sent, the backend stores `limited_image_set` and caps confidence.
+- If a repeated/template-like issue phrase appears, the backend stores `repeated_template_issue_warning`.
+- The frontend shows these warnings and a partial-analysis badge instead of presenting the run as full grading.
+
+Remote worker grading prioritizes available assets in this order:
+
+1. front full
+2. back full
+3. front corners
+4. back corners
+5. edge/surface crops
 
 Useful debug endpoints:
 

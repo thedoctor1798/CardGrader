@@ -40,6 +40,17 @@ def ensure_sqlite_columns():
             "inner_top_pct": "REAL",
             "inner_bottom_pct": "REAL",
         },
+        "analysis_runs": {
+            "image_labels_json": "TEXT",
+            "allowed_areas_json": "TEXT",
+            "warnings_json": "TEXT",
+            "model_parameters_json": "TEXT",
+            "analysis_scope": "TEXT",
+        },
+        "fx_rates": {
+            "error_code": "TEXT",
+            "error_message": "TEXT",
+        },
     }
     with engine.begin() as connection:
         for table_name, missing_columns in table_columns.items():

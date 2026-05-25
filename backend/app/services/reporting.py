@@ -1,4 +1,5 @@
 from fastapi import HTTPException
+import json
 from sqlmodel import Session, select
 
 from ..models import AnalysisAsset, AnalysisFinding, AnalysisRun
@@ -85,6 +86,10 @@ def build_analysis_report(session: Session, analysis_run_id: int) -> dict:
         "human_summary": analysis_run.human_summary,
         "recommendation": analysis_run.recommendation,
         "recommendation_reason": analysis_run.recommendation_reason,
+        "warnings": json_list(analysis_run.warnings_json),
+        "analysis_scope": analysis_run.analysis_scope,
+        "image_labels_sent": json_list(analysis_run.image_labels_json),
+        "allowed_issue_areas": json_list(analysis_run.allowed_areas_json),
         "latest_price": latest_price,
         "latest_centering": latest_centering,
         "opportunity_precheck": opportunity,
@@ -94,3 +99,13 @@ def build_analysis_report(session: Session, analysis_run_id: int) -> dict:
         "main_grade_limiters": main_grade_limiters,
         "manual_review_recommendations": manual_review_recommendations,
     }
+
+
+def json_list(value: str | None) -> list[str]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    return [str(item) for item in parsed] if isinstance(parsed, list) else []

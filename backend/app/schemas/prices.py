@@ -286,6 +286,10 @@ class FxRateRead(SQLModel):
     warning: Optional[str] = None
     error: Optional[str] = None
     message: Optional[str] = None
+    requested_url: Optional[str] = None
+    http_status: Optional[int] = None
+    response_content_type: Optional[str] = None
+    response_preview: Optional[str] = None
 
 
 class FxRatesResponse(SQLModel):

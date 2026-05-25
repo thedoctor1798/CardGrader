@@ -33,6 +33,11 @@ class AnalysisRunRead(SQLModel):
     recommendation: Optional[str] = None
     recommendation_reason: Optional[str] = None
     error_message: Optional[str] = None
+    image_labels_json: Optional[str] = None
+    allowed_areas_json: Optional[str] = None
+    warnings_json: Optional[str] = None
+    model_parameters_json: Optional[str] = None
+    analysis_scope: Optional[str] = None
     created_at: datetime
     completed_at: Optional[datetime] = None
 
@@ -127,6 +132,10 @@ class AnalysisReportRead(SQLModel):
     human_summary: Optional[str] = None
     recommendation: Optional[str] = None
     recommendation_reason: Optional[str] = None
+    warnings: list[str] = Field(default_factory=list)
+    analysis_scope: Optional[str] = None
+    image_labels_sent: list[str] = Field(default_factory=list)
+    allowed_issue_areas: list[str] = Field(default_factory=list)
     latest_price: Optional[PriceObservationRead] = None
     latest_centering: Optional[CenteringMeasurementRead] = None
     opportunity_precheck: Optional[GradingOpportunityRead] = None

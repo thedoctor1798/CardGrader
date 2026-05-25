@@ -1,5 +1,7 @@
 import json
 import logging
+import urllib.error
+import urllib.request
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
 from typing import Any
@@ -9,7 +11,7 @@ from sqlmodel import Session, select
 from .. import config
 from ..models import FxRate
 from ..models.core import utc_now
-from .price_sources.common import ProviderHttpError, build_url, get_json
+from .price_sources.common import build_url
 
 logger = logging.getLogger(__name__)
 
@@ -29,6 +31,10 @@ class FxRateResult:
     warning: str | None = None
     error: str | None = None
     message: str | None = None
+    requested_url: str | None = None
+    http_status: int | None = None
+    response_content_type: str | None = None
+    response_preview: str | None = None
 
 
 def get_rate(
@@ -54,6 +60,7 @@ def get_rate(
 
     cached = latest_cached_rate(session, base, target)
     if cached is not None and not force and cached.expires_at > utc_now():
+        cached_debug = fx_debug_from_raw_response(cached.raw_response_json)
         return FxRateResult(
             ok=True,
             base_currency=base,
@@ -65,6 +72,10 @@ def get_rate(
             provider=cached.provider,
             source="cache",
             raw_response=parse_json(cached.raw_response_json),
+            requested_url=cached_debug.get("requested_url"),
+            http_status=cached_debug.get("http_status"),
+            response_content_type=cached_debug.get("response_content_type"),
+            response_preview=cached_debug.get("response_preview"),
         )
 
     if not config.FX_CONVERSION_ENABLED:
@@ -82,6 +93,7 @@ def get_rate(
     provider_result = fetch_provider_rate(base, target)
     if provider_result.ok and provider_result.rate is not None:
         stored = save_fx_rate(session, provider_result)
+        stored_debug = fx_debug_from_raw_response(stored.raw_response_json)
         return FxRateResult(
             ok=True,
             base_currency=base,
@@ -91,14 +103,19 @@ def get_rate(
             fetched_at=stored.fetched_at,
             expires_at=stored.expires_at,
             provider=stored.provider,
-            source=config.FX_PROVIDER,
+            source=provider_result.source,
             raw_response=parse_json(stored.raw_response_json),
+            requested_url=stored_debug.get("requested_url"),
+            http_status=stored_debug.get("http_status"),
+            response_content_type=stored_debug.get("response_content_type"),
+            response_preview=stored_debug.get("response_preview"),
         )
 
     static = static_rate(base, target, provider_result.warning or provider_result.error)
     if static is not None:
         return static
     if cached is not None:
+        cached_debug = fx_debug_from_raw_response(cached.raw_response_json)
         return FxRateResult(
             ok=False,
             base_currency=base,
@@ -113,6 +130,10 @@ def get_rate(
             warning="fx_provider_failed_stale_cache_available",
             error=provider_result.error,
             message=provider_result.message,
+            requested_url=cached_debug.get("requested_url"),
+            http_status=cached_debug.get("http_status"),
+            response_content_type=cached_debug.get("response_content_type"),
+            response_preview=cached_debug.get("response_preview"),
         )
     return provider_result
 
@@ -161,42 +182,25 @@ def fetch_provider_rate(base: str, target: str) -> FxRateResult:
             message=f"FX provider is not supported: {config.FX_PROVIDER}",
         )
 
-    url = frankfurter_url(base, target)
-    try:
-        response = get_json(url, timeout=config.FX_TIMEOUT_SECONDS)
-    except TimeoutError as exc:
-        return FxRateResult(
-            ok=False,
-            base_currency=base,
-            target_currency=target,
-            source="frankfurter",
-            warning="fx_provider_timeout",
-            error="fx_provider_timeout",
-            message=str(exc) or "Frankfurter FX request timed out.",
-        )
-    except ProviderHttpError as exc:
-        return FxRateResult(
-            ok=False,
-            base_currency=base,
-            target_currency=target,
-            source="frankfurter",
-            warning="fx_provider_failed",
-            error="fx_provider_failed",
-            message=str(exc),
-            raw_response=exc.response.data if exc.response else None,
-        )
+    response = fetch_frankfurter_rate(base, target)
+    if not response.ok:
+        return response
 
-    rate, rate_date = parse_frankfurter_response(response.data, target)
+    rate, rate_date = parse_frankfurter_response(response.raw_response, target)
     if rate is None or rate <= 0:
         return FxRateResult(
             ok=False,
             base_currency=base,
             target_currency=target,
-            source="frankfurter",
+            source=response.source,
             warning="fx_rate_missing",
             error="fx_rate_missing",
             message="Frankfurter response did not include the requested rate.",
-            raw_response=response.data,
+            raw_response=response.raw_response,
+            requested_url=response.requested_url,
+            http_status=response.http_status,
+            response_content_type=response.response_content_type,
+            response_preview=response.response_preview,
         )
 
     now = utc_now()
@@ -209,15 +213,133 @@ def fetch_provider_rate(base: str, target: str) -> FxRateResult:
         fetched_at=now,
         expires_at=now + timedelta(hours=config.FX_CACHE_TTL_HOURS),
         provider="frankfurter",
-        source="frankfurter",
-        raw_response=response.data,
+        source=response.source,
+        raw_response=response.raw_response,
+        requested_url=response.requested_url,
+        http_status=response.http_status,
+        response_content_type=response.response_content_type,
+        response_preview=response.response_preview,
     )
 
 
-def frankfurter_url(base: str, target: str) -> str:
-    if config.FX_PROVIDER_BASE_URL.endswith("/v2"):
-        return build_url(config.FX_PROVIDER_BASE_URL, f"/rate/{base}/{target}")
-    return build_url(config.FX_PROVIDER_BASE_URL, "/latest", {"base": base, "symbols": target})
+def fetch_frankfurter_rate(base: str, target: str) -> FxRateResult:
+    attempts = [
+        ("frankfurter_v2", frankfurter_v2_url(base, target)),
+        ("frankfurter_v1", frankfurter_v1_url(base, target)),
+    ]
+    last_error: FxRateResult | None = None
+    for source, url in attempts:
+        result = request_frankfurter_json(url, source, base, target)
+        if result.ok:
+            return result
+        last_error = result
+        if result.error == "fx_provider_timeout":
+            continue
+        if result.error == "fx_provider_blocked_or_incompatible":
+            continue
+    return last_error or FxRateResult(
+        ok=False,
+        base_currency=base,
+        target_currency=target,
+        source="frankfurter",
+        warning="fx_provider_failed",
+        error="fx_provider_failed",
+        message="Frankfurter FX request failed.",
+    )
+
+
+def request_frankfurter_json(url: str, source: str, base: str, target: str) -> FxRateResult:
+    headers = {
+        "Accept": "application/json",
+        "User-Agent": config.FX_USER_AGENT,
+    }
+    request = urllib.request.Request(url, headers=headers, method="GET")
+    try:
+        with urllib.request.urlopen(request, timeout=config.FX_TIMEOUT_SECONDS) as response:
+            body = response.read().decode("utf-8", errors="replace")
+            content_type = response.headers.get("Content-Type", "")
+            if "json" not in content_type.lower():
+                return blocked_or_incompatible_result(base, target, source, url, response.status, content_type, body)
+            try:
+                payload = json.loads(body) if body else {}
+            except json.JSONDecodeError:
+                return blocked_or_incompatible_result(base, target, source, url, response.status, content_type, body)
+            if "1010" in body:
+                return blocked_or_incompatible_result(base, target, source, url, response.status, content_type, body)
+            return FxRateResult(
+                ok=True,
+                base_currency=base,
+                target_currency=target,
+                source=source,
+                provider="frankfurter",
+                raw_response=payload,
+                requested_url=url,
+                http_status=response.status,
+                response_content_type=content_type,
+                response_preview=body[:500],
+            )
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        content_type = exc.headers.get("Content-Type", "")
+        if "1010" in body or "html" in content_type.lower():
+            return blocked_or_incompatible_result(base, target, source, url, exc.code, content_type, body)
+        return FxRateResult(
+            ok=False,
+            base_currency=base,
+            target_currency=target,
+            source=source,
+            warning="fx_provider_failed",
+            error="fx_provider_failed",
+            message=f"Frankfurter returned HTTP {exc.code}.",
+            requested_url=url,
+            http_status=exc.code,
+            response_content_type=content_type,
+            response_preview=body[:500],
+        )
+    except urllib.error.URLError as exc:
+        reason = str(exc.reason)
+        return FxRateResult(
+            ok=False,
+            base_currency=base,
+            target_currency=target,
+            source=source,
+            warning="fx_provider_timeout",
+            error="fx_provider_timeout",
+            message=reason or "Frankfurter FX request timed out.",
+            requested_url=url,
+        )
+
+
+def blocked_or_incompatible_result(
+    base: str,
+    target: str,
+    source: str,
+    url: str,
+    status: int | None,
+    content_type: str | None,
+    body: str,
+) -> FxRateResult:
+    return FxRateResult(
+        ok=False,
+        base_currency=base,
+        target_currency=target,
+        source=source,
+        warning="fx_provider_blocked_or_incompatible",
+        error="fx_provider_blocked_or_incompatible",
+        message="Frankfurter blocked the request or the adapter used an incompatible endpoint. Check FX endpoint and User-Agent settings.",
+        requested_url=url,
+        http_status=status,
+        response_content_type=content_type,
+        response_preview=body[:500],
+    )
+
+
+def frankfurter_v2_url(base: str, target: str) -> str:
+    return build_url(config.FX_PROVIDER_BASE_URL, "/rates", {"base": base, "quotes": target})
+
+
+def frankfurter_v1_url(base: str, target: str) -> str:
+    return build_url(config.FX_PROVIDER_FALLBACK_BASE_URL, "/latest", {"base": base, "symbols": target})
 
 
 def parse_frankfurter_response(payload: Any, target: str) -> tuple[float | None, date | None]:
@@ -254,7 +376,17 @@ def save_fx_rate(session: Session, result: FxRateResult) -> FxRate:
     rate.rate = float(result.rate or 0)
     rate.fetched_at = now
     rate.expires_at = result.expires_at or now + timedelta(hours=config.FX_CACHE_TTL_HOURS)
-    rate.raw_response_json = json.dumps(result.raw_response, ensure_ascii=True, default=str) if result.raw_response is not None else None
+    raw_payload = {
+        "response": result.raw_response,
+        "requested_url": result.requested_url,
+        "http_status": result.http_status,
+        "response_content_type": result.response_content_type,
+        "response_preview": result.response_preview,
+        "source": result.source,
+    }
+    rate.raw_response_json = json.dumps(raw_payload, ensure_ascii=True, default=str)
+    rate.error_code = result.error
+    rate.error_message = result.message
     rate.updated_at = now
     session.add(rate)
     session.commit()
@@ -310,3 +442,15 @@ def parse_json(value: str | None) -> Any:
         return json.loads(value)
     except json.JSONDecodeError:
         return None
+
+
+def fx_debug_from_raw_response(value: str | None) -> dict[str, Any]:
+    parsed = parse_json(value)
+    if not isinstance(parsed, dict):
+        return {}
+    return {
+        "requested_url": parsed.get("requested_url"),
+        "http_status": parsed.get("http_status"),
+        "response_content_type": parsed.get("response_content_type"),
+        "response_preview": parsed.get("response_preview"),
+    }

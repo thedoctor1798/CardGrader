@@ -331,6 +331,10 @@ export type FxRate = {
   warning?: string | null;
   error?: string | null;
   message?: string | null;
+  requested_url?: string | null;
+  http_status?: number | null;
+  response_content_type?: string | null;
+  response_preview?: string | null;
 };
 
 export type FxRatesResponse = {
@@ -403,6 +407,11 @@ export type AnalysisRun = {
   recommendation?: string | null;
   recommendation_reason?: string | null;
   error_message?: string | null;
+  image_labels_json?: string | null;
+  allowed_areas_json?: string | null;
+  warnings_json?: string | null;
+  model_parameters_json?: string | null;
+  analysis_scope?: string | null;
   created_at: string;
   completed_at?: string | null;
 };
@@ -529,6 +538,10 @@ export type AnalysisReport = {
   human_summary?: string | null;
   recommendation?: string | null;
   recommendation_reason?: string | null;
+  warnings?: string[];
+  analysis_scope?: string | null;
+  image_labels_sent?: string[];
+  allowed_issue_areas?: string[];
   latest_price?: PriceObservation | null;
   latest_centering?: CenteringMeasurement | null;
   opportunity_precheck?: OpportunityPrecheck | null;
@@ -657,6 +670,9 @@ export type RemoteAIGradeResponse = {
   finding_count?: number;
   images_sent?: number;
   image_labels_sent?: string[];
+  allowed_issue_areas?: string[];
+  warnings?: string[];
+  analysis_scope?: string;
 };
 
 export type RecognitionExtracted = {

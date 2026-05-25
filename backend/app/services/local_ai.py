@@ -31,7 +31,9 @@ from ..models import AnalysisAsset, AnalysisFinding, AnalysisRun, Card, Centerin
 
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 LOCAL_AI_ANALYSIS_VERSION = "local_ai_fast_v1"
-LOCAL_AI_PROMPT_VERSION = "local_vision_v1"
+LOCAL_AI_PROMPT_VERSION = "local_vision_v2_evidence_guarded"
+LOCAL_AI_TEMPERATURE = 0.1
+LOCAL_AI_RESPONSE_FORMAT = {"type": "json_object"}
 ASSET_PRIORITY = [
     "front_resized",
     "back_resized",
@@ -80,6 +82,14 @@ REMOTE_WORKER_LABELS = {
     "back_corner_tr": "back_top_right_corner",
     "back_corner_bl": "back_bottom_left_corner",
     "back_corner_br": "back_bottom_right_corner",
+    "front_edge_top": "front_top_edge",
+    "front_edge_right": "front_right_edge",
+    "front_edge_bottom": "front_bottom_edge",
+    "front_edge_left": "front_left_edge",
+    "back_edge_top": "back_top_edge",
+    "back_edge_right": "back_right_edge",
+    "back_edge_bottom": "back_bottom_edge",
+    "back_edge_left": "back_left_edge",
 }
 ALLOWED_FINDING_TYPES = {
     "corner_whitening",
@@ -325,8 +335,9 @@ class LMStudioDirectProvider(LocalAIProvider):
         payload = {
             "model": LOCAL_AI_MODEL_NAME,
             "messages": [{"role": "user", "content": messages_content}],
-            "temperature": 0,
+            "temperature": LOCAL_AI_TEMPERATURE,
             "max_tokens": LOCAL_AI_MAX_TOKENS,
+            "response_format": LOCAL_AI_RESPONSE_FORMAT,
         }
         response = http_json("POST", f"{self.base_url.rstrip('/')}/chat/completions", payload)
         content, parsed_from_reasoning_content = content_from_chat_response(response)
@@ -341,8 +352,9 @@ class LMStudioDirectProvider(LocalAIProvider):
         payload = {
             "model": LOCAL_AI_MODEL_NAME,
             "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
-            "temperature": 0,
+            "temperature": LOCAL_AI_TEMPERATURE,
             "max_tokens": LOCAL_AI_MAX_TOKENS,
+            "response_format": LOCAL_AI_RESPONSE_FORMAT,
         }
         response = http_json("POST", f"{self.base_url.rstrip('/')}/chat/completions", payload)
         content, _ = content_from_chat_response(response)
@@ -555,6 +567,163 @@ def selected_asset_labels(assets: list[AnalysisAsset]) -> list[str]:
     return [asset.label or asset.file_path for asset in assets]
 
 
+def allowed_areas_for_assets(assets: list[AnalysisAsset]) -> list[str]:
+    allowed: list[str] = []
+    for asset in assets:
+        label = remote_worker_label(asset)
+        if label not in allowed:
+            allowed.append(label)
+    return allowed
+
+
+def analysis_scope_for_assets(assets: list[AnalysisAsset], pass_type: str) -> str:
+    if pass_type in {"front", "back", "debug_single_image"}:
+        return "partial"
+    allowed = set(allowed_areas_for_assets(assets))
+    return "full" if {"front_full", "back_full"}.issubset(allowed) and len(assets) > 1 else "partial"
+
+
+def model_parameters() -> dict[str, Any]:
+    return {
+        "temperature": LOCAL_AI_TEMPERATURE,
+        "max_tokens": LOCAL_AI_MAX_TOKENS,
+        "response_format": LOCAL_AI_RESPONSE_FORMAT,
+        "disable_thinking": LOCAL_AI_DISABLE_THINKING,
+    }
+
+
+def set_analysis_debug_metadata(
+    analysis_run: AnalysisRun,
+    assets: list[AnalysisAsset],
+    allowed_areas: list[str],
+    warnings: list[str],
+    analysis_scope: str,
+) -> None:
+    analysis_run.image_labels_json = json.dumps(selected_asset_labels(assets), ensure_ascii=True)
+    analysis_run.allowed_areas_json = json.dumps(allowed_areas, ensure_ascii=True)
+    analysis_run.warnings_json = json.dumps(sorted(set(warnings)), ensure_ascii=True)
+    analysis_run.model_parameters_json = json.dumps(model_parameters(), ensure_ascii=True)
+    analysis_run.analysis_scope = analysis_scope
+
+
+def add_warning(warnings: list[str], warning: str) -> None:
+    if warning not in warnings:
+        warnings.append(warning)
+
+
+def cap_confidence_level(value: Any, max_level: str) -> str:
+    order = {"low": 0, "medium": 1, "high": 2}
+    normalized = str(value or "low").lower()
+    if normalized not in order:
+        normalized = "low"
+    return normalized if order[normalized] <= order[max_level] else max_level
+
+
+def area_side(area: str) -> str:
+    if area.startswith("front_"):
+        return "front"
+    if area.startswith("back_"):
+        return "back"
+    return "unknown"
+
+
+def normalize_area_name(value: Any, allowed_areas: list[str]) -> str:
+    raw = str(value or "").strip().lower().replace(" ", "_").replace("-", "_")
+    if raw in allowed_areas:
+        return raw
+    if raw in {"front", "front_resized", "front_normalized"} and "front_full" in allowed_areas:
+        return "front_full"
+    if raw in {"back", "back_resized", "back_normalized"} and "back_full" in allowed_areas:
+        return "back_full"
+    label_map = {
+        "corner_tl": "top_left_corner",
+        "corner_tr": "top_right_corner",
+        "corner_bl": "bottom_left_corner",
+        "corner_br": "bottom_right_corner",
+        "edge_top": "top_edge",
+        "edge_right": "right_edge",
+        "edge_bottom": "bottom_edge",
+        "edge_left": "left_edge",
+    }
+    if raw in label_map:
+        for prefix in ("front", "back"):
+            candidate = f"{prefix}_{label_map[raw]}"
+            if candidate in allowed_areas:
+                return candidate
+    return raw or "unknown"
+
+
+def visible_side_available(allowed_areas: list[str], side: str) -> bool:
+    return any(area.startswith(f"{side}_") for area in allowed_areas)
+
+
+def filter_local_ai_findings(
+    data: dict[str, Any],
+    allowed_areas: list[str],
+    warnings: list[str],
+) -> dict[str, Any]:
+    filtered: list[dict[str, Any]] = []
+    for finding in data.get("findings", []):
+        area = normalize_area_name(
+            finding.get("image_label") or finding.get("location_label") or finding.get("area"),
+            allowed_areas,
+        )
+        side = str(finding.get("side") or area_side(area) or "unknown").lower()
+        if area not in allowed_areas:
+            add_warning(warnings, "model_reported_issue_for_unprovided_area")
+            continue
+        if side in {"front", "back"} and not visible_side_available(allowed_areas, side):
+            add_warning(warnings, "model_reported_issue_for_unprovided_area")
+            continue
+        finding["image_label"] = area
+        finding["location_label"] = area
+        finding["side"] = side if side in {"front", "back"} else area_side(area)
+        filtered.append(finding)
+    data["findings"] = filtered
+    return data
+
+
+def filter_remote_issues(
+    issues: Any,
+    allowed_areas: list[str],
+    warnings: list[str],
+) -> list[dict[str, Any]]:
+    if not isinstance(issues, list):
+        return []
+    filtered: list[dict[str, Any]] = []
+    for issue in issues:
+        if not isinstance(issue, dict):
+            continue
+        area = normalize_area_name(issue.get("area"), allowed_areas)
+        side = area_side(area)
+        if area not in allowed_areas:
+            add_warning(warnings, "model_reported_issue_for_unprovided_area")
+            continue
+        if side in {"front", "back"} and not visible_side_available(allowed_areas, side):
+            add_warning(warnings, "model_reported_issue_for_unprovided_area")
+            continue
+        next_issue = dict(issue)
+        next_issue["area"] = area
+        filtered.append(next_issue)
+    return filtered
+
+
+def apply_grading_guardrails(
+    data: dict[str, Any],
+    assets: list[AnalysisAsset],
+    allowed_areas: list[str],
+    analysis_scope: str,
+    warnings: list[str],
+) -> dict[str, Any]:
+    if analysis_scope == "partial" or len(assets) <= 1:
+        add_warning(warnings, "limited_image_set")
+        data["confidence_level"] = cap_confidence_level(data.get("confidence_level"), "medium")
+    data = filter_local_ai_findings(data, allowed_areas, warnings)
+    if warnings:
+        data["guardrail_warnings"] = sorted(set(warnings))
+    return data
+
+
 def opencv_measurements(session: Session, opencv_run: AnalysisRun) -> dict[str, Any]:
     findings = session.exec(
         select(AnalysisFinding)
@@ -580,17 +749,24 @@ def pass_focus_text(pass_type: str) -> str:
     if pass_type == "front":
         return (
             "Only analyze front images. Do not mention the back. Do not assume back condition. "
-            "Focus on front surface, front corners, front edges, print lines, scratches, dents, and holo glare uncertainty."
+            "Report only front-side defects that are visibly present in the provided images."
         )
     if pass_type == "back":
         return (
             "Only analyze back images. Do not mention the front. Do not assume front condition. "
-            "Focus on whitening, back edge wear, back corner wear, dents, scratches, and stains."
+            "Report only back-side defects that are visibly present in the provided images."
         )
     return "Analyze only the images provided. Do not assume missing side condition."
 
 
-def build_prompt(card: Card, measurements: dict[str, Any], pass_type: str = "fast") -> str:
+def build_prompt(
+    card: Card,
+    measurements: dict[str, Any],
+    pass_type: str = "fast",
+    allowed_areas: list[str] | None = None,
+    image_labels: list[str] | None = None,
+    analysis_scope: str = "partial",
+) -> str:
     no_thinking = (
         "Do not think step by step. Do not output reasoning. Return only the final JSON object. "
         "Start with { and end with }.\n\n"
@@ -614,27 +790,17 @@ Local OpenCV measurements:
 {json.dumps(measurements, ensure_ascii=False)}
 
 Pass type: {pass_type}
+Analysis scope: {analysis_scope}
+Images attached in order:
+{json.dumps(image_labels or [], ensure_ascii=False)}
+Allowed issue areas:
+{json.dumps(allowed_areas or [], ensure_ascii=False)}
+
 Pass instructions:
 {pass_focus_text(pass_type)}
 
 Your task:
-Analyze the provided full-card resized image or images:
-- front resized image when provided
-- back resized image when provided
-- do not assume missing side condition
-
-Look for:
-- corner whitening
-- edge whitening
-- rounded corners
-- dents
-- scratches
-- print lines
-- stains
-- surface wear
-- silvering
-- glare/reflection uncertainty
-- image quality issues
+Analyze only the provided images. Only report visible evidence.
 
 Use this strict JSON schema:
 {{
@@ -646,7 +812,7 @@ Use this strict JSON schema:
   }},
   "findings": [
     {{
-      "image_label": "front | back | corner_tl | corner_tr | corner_bl | corner_br | edge_top | edge_right | edge_bottom | edge_left | unknown",
+      "image_label": "one exact value from the Allowed issue areas list above",
       "side": "front | back | unknown",
       "finding_type": "corner_whitening | edge_whitening | scratch | print_line | dent | stain | surface_wear | glare_uncertain | image_quality_issue | unknown",
       "severity": "none | very_minor | minor | moderate | severe",
@@ -667,13 +833,27 @@ Use this strict JSON schema:
 }}
 
 Rules:
+- Every findings[].image_label must be exactly one of the allowed issue areas listed above.
+- Only report defects that are visible in the provided image(s).
+- Do not infer back-side defects from front images.
+- Do not infer front-side defects from back images.
+- Do not report an issue in an area if no image/crop for that area was provided.
+- If no clear defect is visible, findings must be [].
+- If image quality is insufficient, lower confidence instead of inventing defects.
+- If only one image is provided, do not produce confident full-card conclusions; confidence_level must not be high.
+- If only front image is provided, do not report back issues.
+- If only back image is provided, do not report front surface/holo issues.
+- Do not default to 8.5 or any grade-like conclusion.
+- Do not reuse common grading phrases unless supported by visible evidence.
+- Do not say whitening exists unless it is visibly present.
+- If uncertain between high grades, explain the visible evidence in findings. If there is no visible evidence, keep findings empty and lower confidence.
 - If unsure whether something is a real flaw or just glare, use finding_type "glare_uncertain".
 - If no clear flaw is visible, return an empty findings list.
 - Do not claim a PSA grade.
 - Do not estimate market price.
 - Do not mention external grading companies except in generic grading impact terms.
 - Be conservative with gem mint claims.
-- For tiny whitening, severity should be "very_minor" or "minor".
+- For any visible tiny defect, severity should be "very_minor" or "minor".
 - Use bbox only if you can approximate the location. If not, set x/y/width/height to 0.{suffix}"""
 
 
@@ -998,7 +1178,16 @@ def dry_run_local_ai(session: Session, owned_card_id: int, pass_type: str = "fas
         assets = collect_assets_for_pass(session, opencv_run.id, pass_type)
     if not assets:
         raise HTTPException(status_code=400, detail="No OpenCV assets found for local AI analysis.")
-    prompt = build_prompt(card, opencv_measurements(session, opencv_run), pass_type)
+    allowed_areas = allowed_areas_for_assets(assets)
+    image_labels = selected_asset_labels(assets)
+    prompt = build_prompt(
+        card,
+        opencv_measurements(session, opencv_run),
+        pass_type,
+        allowed_areas,
+        image_labels,
+        analysis_scope_for_assets(assets, pass_type),
+    )
     config = local_ai_config()
     return {
         "config": config,
@@ -1080,6 +1269,7 @@ def remote_grade_payload(
     opencv_run: AnalysisRun | None,
     assets: list[AnalysisAsset],
 ) -> dict[str, Any]:
+    allowed_areas = allowed_areas_for_assets(assets)
     return {
         "card_id": str(card.id),
         "owned_card_id": str(owned_card.id),
@@ -1088,6 +1278,17 @@ def remote_grade_payload(
         "language": card.language,
         "centering": remote_worker_centering_payload(session, owned_card.id, opencv_run),
         "images": [remote_worker_image_payload(asset) for asset in assets],
+        "allowed_areas": allowed_areas,
+        "image_labels": selected_asset_labels(assets),
+        "analysis_scope": analysis_scope_for_assets(assets, "remote_ai_grade"),
+        "model_parameters": model_parameters(),
+        "prompt_rules": [
+            "Only report defects visible in the provided images.",
+            "Every detected_issues[].area must be one of allowed_areas.",
+            "Do not infer back defects from front images or front defects from back images.",
+            "If no clear defect is visible, detected_issues must be [].",
+            "Do not default to 8.5 or repeat common whitening phrases without visible evidence.",
+        ],
         "grading_profile": "pokemon_tcg_default",
     }
 
@@ -1190,6 +1391,51 @@ def grade_impact_for_severity(severity: str) -> str:
     return "none"
 
 
+def add_template_warnings(session: Session, owned_card_id: int, issues: list[dict[str, Any]], warnings: list[str]) -> None:
+    suspicious_phrases = ("minor whitening", "limits upside", "back_top_left_corner whitening")
+    combined = " ".join(
+        str(issue.get(key) or "").lower()
+        for issue in issues
+        for key in ("area", "description")
+    )
+    if any(phrase in combined for phrase in suspicious_phrases):
+        add_warning(warnings, "repeated_template_issue_warning")
+        return
+
+    descriptions = {
+        str(issue.get("description") or "").strip().lower()
+        for issue in issues
+        if str(issue.get("description") or "").strip()
+    }
+    if not descriptions:
+        return
+    for description in descriptions:
+        existing = session.exec(
+            select(AnalysisFinding, AnalysisRun)
+            .join(AnalysisRun, AnalysisFinding.analysis_run_id == AnalysisRun.id)
+            .where(AnalysisFinding.description == description)
+            .where(AnalysisRun.owned_card_id != owned_card_id)
+        ).all()
+        distinct_cards = {row[1].owned_card_id for row in existing}
+        if len(distinct_cards) >= 2:
+            add_warning(warnings, "repeated_template_issue_warning")
+            return
+
+
+def add_consistency_warnings(
+    result: dict[str, Any],
+    opencv_run: AnalysisRun | None,
+    issues: list[dict[str, Any]],
+    warnings: list[str],
+) -> None:
+    subscores = result.get("subscores") if isinstance(result.get("subscores"), dict) else {}
+    centering_score = score_value(subscores.get("centering")) or (opencv_run.centering_score if opencv_run else None)
+    estimated_grade = score_value(result.get("estimated_grade"))
+    if centering_score is not None and centering_score >= 9 and estimated_grade is not None and estimated_grade < 8 and not issues:
+        add_warning(warnings, "model_grade_low_without_visible_evidence")
+        result["confidence"] = cap_confidence_level(result.get("confidence"), "low")
+
+
 def save_remote_worker_findings(session: Session, analysis_run: AnalysisRun, issues: Any) -> int:
     if not isinstance(issues, list):
         return 0
@@ -1242,6 +1488,12 @@ def run_remote_ai_grade(session: Session, owned_card_id: int) -> dict[str, Any]:
     assets = collect_remote_worker_assets(session, opencv_run.id)
     if not assets:
         raise HTTPException(status_code=400, detail="No OpenCV assets found for remote AI grading.")
+    allowed_areas = allowed_areas_for_assets(assets)
+    image_labels = selected_asset_labels(assets)
+    analysis_scope = analysis_scope_for_assets(assets, "remote_ai_grade")
+    guardrail_warnings: list[str] = []
+    if analysis_scope == "partial":
+        add_warning(guardrail_warnings, "limited_image_set")
 
     analysis_run = AnalysisRun(
         owned_card_id=owned_card_id,
@@ -1252,6 +1504,11 @@ def run_remote_ai_grade(session: Session, owned_card_id: int) -> dict[str, Any]:
         prompt_version="remote_worker_grade_v1",
         analysis_version="remote_ai_worker_v1",
         centering_score=opencv_run.centering_score,
+        image_labels_json=json.dumps(image_labels, ensure_ascii=True),
+        allowed_areas_json=json.dumps(allowed_areas, ensure_ascii=True),
+        warnings_json=json.dumps(guardrail_warnings, ensure_ascii=True),
+        model_parameters_json=json.dumps(model_parameters(), ensure_ascii=True),
+        analysis_scope=analysis_scope,
     )
     session.add(analysis_run)
     session.commit()
@@ -1280,27 +1537,48 @@ def run_remote_ai_grade(session: Session, owned_card_id: int) -> dict[str, Any]:
                 "analysis_run": analysis_run,
                 "worker_result": worker_response,
                 "images_sent": len(assets),
-                "image_labels_sent": selected_asset_labels(assets),
+                "image_labels_sent": image_labels,
+                "allowed_issue_areas": allowed_areas,
+                "warnings": sorted(set(guardrail_warnings)),
+                "analysis_scope": analysis_scope,
             }
 
         result = worker_response.get("result") if isinstance(worker_response.get("result"), dict) else worker_response
+        filtered_issues = filter_remote_issues(result.get("detected_issues"), allowed_areas, guardrail_warnings)
+        if len(filtered_issues) != len(result.get("detected_issues") or []):
+            add_warning(guardrail_warnings, "invalid_issues_filtered")
+        add_template_warnings(session, owned_card_id, filtered_issues, guardrail_warnings)
+        add_consistency_warnings(result, opencv_run, filtered_issues, guardrail_warnings)
+        result["detected_issues"] = filtered_issues
+        result["warnings"] = sorted(set([*result.get("warnings", []), *guardrail_warnings])) if isinstance(result.get("warnings"), list) else sorted(set(guardrail_warnings))
+        result["analysis_scope"] = analysis_scope
+        result["allowed_issue_areas"] = allowed_areas
+        if analysis_scope == "partial":
+            result["confidence"] = cap_confidence_level(result.get("confidence"), "medium")
         subscores = result.get("subscores") if isinstance(result.get("subscores"), dict) else {}
         grade_range = result.get("grade_range") if isinstance(result.get("grade_range"), dict) else {}
-        finding_count = save_remote_worker_findings(session, analysis_run, result.get("detected_issues"))
+        finding_count = save_remote_worker_findings(session, analysis_run, filtered_issues)
 
         analysis_run.status = "completed"
         analysis_run.model_name = str(worker_response.get("model") or LOCAL_AI_MODEL_NAME or "")
-        analysis_run.overall_score = score_value(result.get("estimated_grade"))
-        analysis_run.estimated_grade_low = grade_range_value(grade_range.get("low"))
-        analysis_run.estimated_grade_high = grade_range_value(grade_range.get("high"))
+        if analysis_scope == "full":
+            analysis_run.overall_score = score_value(result.get("estimated_grade"))
+            analysis_run.estimated_grade_low = grade_range_value(grade_range.get("low"))
+            analysis_run.estimated_grade_high = grade_range_value(grade_range.get("high"))
         analysis_run.confidence_level = str(result.get("confidence") or "medium").lower()
         analysis_run.centering_score = score_value(subscores.get("centering")) or analysis_run.centering_score
-        analysis_run.corners_score = score_value(subscores.get("corners"))
-        analysis_run.edges_score = score_value(subscores.get("edges"))
-        analysis_run.surface_score = score_value(subscores.get("surface"))
+        if analysis_scope == "full":
+            analysis_run.corners_score = score_value(subscores.get("corners"))
+            analysis_run.edges_score = score_value(subscores.get("edges"))
+            analysis_run.surface_score = score_value(subscores.get("surface"))
         analysis_run.human_summary = result.get("summary")
-        analysis_run.recommendation = result.get("recommended_action")
-        analysis_run.recommendation_reason = f"PSA 10 risk: {result.get('psa_10_risk') or 'unknown'}"
+        analysis_run.recommendation = "partial_analysis" if analysis_scope == "partial" else result.get("recommended_action")
+        analysis_run.recommendation_reason = (
+            "Részleges elemzés, nem teljes grading."
+            if analysis_scope == "partial"
+            else f"PSA 10 risk: {result.get('psa_10_risk') or 'unknown'}"
+        )
+        set_analysis_debug_metadata(analysis_run, assets, allowed_areas, guardrail_warnings, analysis_scope)
         analysis_run.completed_at = datetime.utcnow()
         session.add(analysis_run)
         session.commit()
@@ -1313,10 +1591,18 @@ def run_remote_ai_grade(session: Session, owned_card_id: int) -> dict[str, Any]:
                 key: worker_response.get(key)
                 for key in ["model", "duration_seconds", "raw_response_preview"]
                 if key in worker_response
+            } | {
+                "warnings": sorted(set(guardrail_warnings)),
+                "allowed_issue_areas": allowed_areas,
+                "analysis_scope": analysis_scope,
+                "model_parameters": model_parameters(),
             },
             "finding_count": finding_count,
             "images_sent": len(assets),
-            "image_labels_sent": selected_asset_labels(assets),
+            "image_labels_sent": image_labels,
+            "allowed_issue_areas": allowed_areas,
+            "warnings": sorted(set(guardrail_warnings)),
+            "analysis_scope": analysis_scope,
         }
     except HTTPException:
         analysis_run.status = "failed"
@@ -1351,6 +1637,10 @@ def local_ai_debug_single_image(session: Session, owned_card_id: int) -> dict[st
     if not assets:
         raise HTTPException(status_code=400, detail="No OpenCV assets found for local AI analysis.")
     asset = choose_single_debug_asset(assets)
+    debug_assets = [asset]
+    allowed_areas = allowed_areas_for_assets(debug_assets)
+    image_labels = selected_asset_labels(debug_assets)
+    warnings = ["limited_image_set"]
 
     analysis_run = AnalysisRun(
         owned_card_id=owned_card_id,
@@ -1360,12 +1650,24 @@ def local_ai_debug_single_image(session: Session, owned_card_id: int) -> dict[st
         model_name=LOCAL_AI_MODEL_NAME,
         prompt_version="local_vision_debug_v1",
         analysis_version="local_ai_debug_single_image_v1",
+        image_labels_json=json.dumps(image_labels, ensure_ascii=True),
+        allowed_areas_json=json.dumps(allowed_areas, ensure_ascii=True),
+        warnings_json=json.dumps(warnings, ensure_ascii=True),
+        model_parameters_json=json.dumps(model_parameters(), ensure_ascii=True),
+        analysis_scope="partial",
+        recommendation="partial_analysis",
+        recommendation_reason="Részleges elemzés, nem teljes grading.",
     )
     session.add(analysis_run)
     session.commit()
     session.refresh(analysis_run)
 
-    prompt = 'Return JSON only: {"ok": true, "summary": "string"}'
+    prompt = (
+        'Return JSON only: {"ok": true, "summary": "string"}. '
+        "This is a partial single-image debug check, not full grading. "
+        f"Allowed issue areas: {json.dumps(allowed_areas, ensure_ascii=False)}. "
+        "Do not report defects outside those areas."
+    )
     if LOCAL_AI_DISABLE_THINKING:
         prompt = (
             "Do not think step by step. Do not output reasoning. Return only JSON. Start with { and end with }.\n"
@@ -1374,8 +1676,9 @@ def local_ai_debug_single_image(session: Session, owned_card_id: int) -> dict[st
     payload = {
         "model": LOCAL_AI_MODEL_NAME,
         "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}, data_url_for_asset(asset)]}],
-        "temperature": 0,
+        "temperature": LOCAL_AI_TEMPERATURE,
         "max_tokens": LOCAL_AI_MAX_TOKENS,
+        "response_format": LOCAL_AI_RESPONSE_FORMAT,
     }
     try:
         response = http_json("POST", f"{LOCAL_AI_BASE_URL.rstrip('/')}/chat/completions", payload)
@@ -1407,6 +1710,10 @@ def local_ai_debug_single_image(session: Session, owned_card_id: int) -> dict[st
             "status": "completed",
             "model": LOCAL_AI_MODEL_NAME,
             "image_label_sent": asset.label,
+            "allowed_issue_areas": allowed_areas,
+            "warnings": warnings,
+            "analysis_scope": "partial",
+            "model_parameters": model_parameters(),
             "finish_reason": finish_reason,
             "content": content,
             "reasoning_content_present": bool(reasoning_content),
@@ -1427,6 +1734,10 @@ def local_ai_debug_single_image(session: Session, owned_card_id: int) -> dict[st
             "status": "failed",
             "model": LOCAL_AI_MODEL_NAME,
             "image_label_sent": asset.label,
+            "allowed_issue_areas": allowed_areas,
+            "warnings": warnings,
+            "analysis_scope": "partial",
+            "model_parameters": model_parameters(),
             "finish_reason": None,
             "content": "LM Studio hibát adott vissza. Részletek a lokális debug fájlban.",
             "reasoning_content_present": False,
@@ -1454,6 +1765,12 @@ def run_local_ai_pass(session: Session, owned_card_id: int, pass_type: str = "fa
     assets = collect_assets_for_pass(session, opencv_run.id, pass_type)
     if not assets:
         raise HTTPException(status_code=400, detail=f"No {pass_type} OpenCV assets found for local AI analysis.")
+    allowed_areas = allowed_areas_for_assets(assets)
+    image_labels = selected_asset_labels(assets)
+    analysis_scope = analysis_scope_for_assets(assets, pass_type)
+    guardrail_warnings: list[str] = []
+    if analysis_scope == "partial":
+        add_warning(guardrail_warnings, "limited_image_set")
 
     analysis_run = AnalysisRun(
         owned_card_id=owned_card_id,
@@ -1463,6 +1780,11 @@ def run_local_ai_pass(session: Session, owned_card_id: int, pass_type: str = "fa
         model_name=LOCAL_AI_MODEL_NAME,
         prompt_version=LOCAL_AI_PROMPT_VERSION,
         analysis_version=f"local_ai_{pass_type}_v1",
+        image_labels_json=json.dumps(image_labels, ensure_ascii=True),
+        allowed_areas_json=json.dumps(allowed_areas, ensure_ascii=True),
+        warnings_json=json.dumps(guardrail_warnings, ensure_ascii=True),
+        model_parameters_json=json.dumps(model_parameters(), ensure_ascii=True),
+        analysis_scope=analysis_scope,
     )
     session.add(analysis_run)
     session.commit()
@@ -1472,7 +1794,14 @@ def run_local_ai_pass(session: Session, owned_card_id: int, pass_type: str = "fa
     parsed_data: dict[str, Any] | None = None
     try:
         raw_response, full_response, parsed_from_reasoning_content = call_openai_compatible(
-            build_prompt(card, opencv_measurements(session, opencv_run), pass_type),
+            build_prompt(
+                card,
+                opencv_measurements(session, opencv_run),
+                pass_type,
+                allowed_areas,
+                image_labels,
+                analysis_scope,
+            ),
             assets,
         )
         if not raw_response.strip():
@@ -1490,13 +1819,20 @@ def run_local_ai_pass(session: Session, owned_card_id: int, pass_type: str = "fa
             data, _, repaired = parse_with_optional_repair(session, analysis_run.id, raw_response)
             data["repaired_from_non_json_output"] = repaired
         data["parsed_from_reasoning_content"] = parsed_from_reasoning_content
+        data = apply_grading_guardrails(data, assets, allowed_areas, analysis_scope, guardrail_warnings)
         parsed_data = data
         save_debug_artifacts(session, analysis_run.id, full_response, parsed_data)
         save_findings(session, analysis_run, data, pass_type if pass_type in {"front", "back"} else "unknown")
         analysis_run.status = "completed"
         analysis_run.human_summary = data.get("overall_visual_condition")
         analysis_run.confidence_level = data.get("confidence_level", "low")
-        analysis_run.recommendation = "local_ai_findings_completed"
+        analysis_run.recommendation = "partial_analysis" if analysis_scope == "partial" else "local_ai_findings_completed"
+        analysis_run.recommendation_reason = (
+            "Részleges elemzés, nem teljes grading."
+            if analysis_scope == "partial"
+            else analysis_run.recommendation_reason
+        )
+        set_analysis_debug_metadata(analysis_run, assets, allowed_areas, guardrail_warnings, analysis_scope)
         analysis_run.completed_at = datetime.utcnow()
         session.add(analysis_run)
         session.commit()
@@ -1511,12 +1847,18 @@ def run_local_ai_pass(session: Session, owned_card_id: int, pass_type: str = "fa
         if findings:
             from .annotations import generate_annotations
             generate_annotations(session, analysis_run.id)
-        analysis_run = score_analysis_run(session, analysis_run.id)
+        if analysis_scope == "partial":
+            session.refresh(analysis_run)
+        else:
+            analysis_run = score_analysis_run(session, analysis_run.id)
         return {
             "analysis_run": analysis_run,
             "finding_count": len(findings),
             "images_sent": len(assets),
-            "image_labels_sent": selected_asset_labels(assets),
+            "image_labels_sent": image_labels,
+            "allowed_issue_areas": allowed_areas,
+            "warnings": sorted(set(guardrail_warnings)),
+            "analysis_scope": analysis_scope,
             "status": analysis_run.status,
         }
     except (json.JSONDecodeError, ValueError) as exc:

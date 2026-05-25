@@ -35,7 +35,12 @@ export function FxSettings() {
     try {
       const response = await api.refreshFxRates({ currencies: ["USD", "EUR"], target_currency: "HUF", force: true });
       setFx(response);
-      setMessage(response.ok ? "Árfolyamok frissítve." : "Az árfolyam frissítés részben sikertelen.");
+      const blocked = response.rates.some((rate) => rate.error === "fx_provider_blocked_or_incompatible");
+      setMessage(response.ok
+        ? "Árfolyamok frissítve."
+        : blocked
+          ? "Az árfolyam lekérése sikertelen. A Frankfurter blokkolta a kérést vagy inkompatibilis endpointot használtunk. Ellenőrizd az FX endpointot és a User-Agent beállítást."
+          : "Az árfolyam frissítés részben sikertelen.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Árfolyam frissítési hiba.");
     } finally {
@@ -71,7 +76,8 @@ export function FxSettings() {
                 <span className="rounded-full border border-slate-700 px-2 py-1 text-xs text-slate-400">{rate.source || "-"}</span>
               </div>
               <div className="mt-3 text-xs text-slate-500">Dátum: {rate.rate_date || "-"} · Lejár: {rate.expires_at ? new Date(rate.expires_at).toLocaleString("hu-HU") : "-"}</div>
-              {rate.warning || rate.error ? <div className="mt-2 text-sm text-amber-200">{rate.message || rate.warning || rate.error}</div> : null}
+              {rate.warning || rate.error ? <div className="mt-2 text-sm text-amber-200">{fxMessage(rate.message || rate.warning || rate.error)}</div> : null}
+              {rate.requested_url && <div className="mt-2 break-all text-[11px] text-slate-600">{rate.requested_url}</div>}
             </div>
           ))}
         </div>
@@ -97,4 +103,11 @@ function FxInfo({ label, value, tone }: { label: string; value: string; tone?: "
       <div className={`mt-1 text-sm font-semibold ${color}`}>{value}</div>
     </div>
   );
+}
+
+function fxMessage(message?: string | null): string {
+  if (message === "fx_provider_blocked_or_incompatible") {
+    return "Az árfolyam lekérése sikertelen. A Frankfurter blokkolta a kérést vagy inkompatibilis endpointot használtunk.";
+  }
+  return message || "-";
 }

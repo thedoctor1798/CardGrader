@@ -289,35 +289,60 @@ function displayRemoteValue(value?: number | string | null): string {
   return value;
 }
 
+function aiWarningText(warning: string): string {
+  if (warning === "model_reported_issue_for_unprovided_area" || warning === "invalid_issues_filtered") {
+    return "A modell olyan területre jelzett hibát, amelyről nem kapott képet. Ez a jelzés el lett vetve.";
+  }
+  if (warning === "limited_image_set") {
+    return "Csak egy kép vagy hiányos képsor alapján készült, ezért nem teljes grading.";
+  }
+  if (warning === "repeated_template_issue_warning") {
+    return "A válasz sablonos hibaleírásra hasonlít; érdemes kézzel ellenőrizni.";
+  }
+  if (warning === "model_grade_low_without_visible_evidence") {
+    return "A modell alacsonyabb grade-et jelzett látható indok nélkül, ezért a bizalom csökkentve lett.";
+  }
+  return warning;
+}
+
 function RemoteAIGradePanel({ response }: { response: RemoteAIGradeResponse }) {
   const result = response.worker_result as RemoteAIWorkerResult;
   const issues = Array.isArray(result.detected_issues) ? result.detected_issues : [];
+  const metaWarnings = (response.worker_meta as { warnings?: unknown } | undefined)?.warnings;
+  const warnings = response.warnings ?? (Array.isArray(metaWarnings) ? metaWarnings.map(String) : []);
+  const isPartial = response.analysis_scope === "partial" || response.analysis_run?.analysis_scope === "partial";
   return (
     <div className={response.ok ? "mt-4 rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-4 text-sm text-emerald-50" : "mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-100"}>
       <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <div className="font-semibold">{response.ok ? "Remote AI grading" : "Remote AI worker hiba"}</div>
+          {isPartial && <div className="mt-2 inline-flex rounded-full border border-amber-500/40 px-2 py-0.5 text-xs text-amber-100">Részleges elemzés</div>}
           <div className="mt-1 text-xs opacity-80">
             Képek: {response.images_sent ?? "-"} · {response.image_labels_sent?.join(", ") || "-"}
           </div>
         </div>
         <div className="text-right">
-          <div className="text-2xl font-semibold">{displayRemoteValue(result.estimated_grade)}</div>
+          <div className="text-2xl font-semibold">{isPartial ? "-" : displayRemoteValue(result.estimated_grade)}</div>
           <div className="text-xs opacity-80">Becslés</div>
         </div>
       </div>
       {response.ok ? (
         <div className="mt-4 space-y-4">
+          {warnings.length > 0 && (
+            <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
+              {warnings.map((warning) => <div key={warning}>{aiWarningText(warning)}</div>)}
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-2">
-            <StatCard label="Range" value={`${displayRemoteValue(result.grade_range?.low)} - ${displayRemoteValue(result.grade_range?.high)}`} />
+            <StatCard label="Range" value={isPartial ? "Részleges" : `${displayRemoteValue(result.grade_range?.low)} - ${displayRemoteValue(result.grade_range?.high)}`} />
             <StatCard label="Confidence" value={result.confidence || "-"} />
             <StatCard label="Centering" value={displayRemoteValue(result.subscores?.centering)} />
-            <StatCard label="Corners" value={displayRemoteValue(result.subscores?.corners)} />
-            <StatCard label="Edges" value={displayRemoteValue(result.subscores?.edges)} />
-            <StatCard label="Surface" value={displayRemoteValue(result.subscores?.surface)} />
+            <StatCard label="Corners" value={isPartial ? "-" : displayRemoteValue(result.subscores?.corners)} />
+            <StatCard label="Edges" value={isPartial ? "-" : displayRemoteValue(result.subscores?.edges)} />
+            <StatCard label="Surface" value={isPartial ? "-" : displayRemoteValue(result.subscores?.surface)} />
           </div>
           {result.summary && <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-slate-200">{result.summary}</div>}
-          <div className="grid gap-2 sm:grid-cols-2">
+          {!isPartial && <div className="grid gap-2 sm:grid-cols-2">
             <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">
               <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">PSA 10 risk</div>
               <div className="mt-1 text-slate-100">{result.psa_10_risk || "-"}</div>
@@ -326,7 +351,7 @@ function RemoteAIGradePanel({ response }: { response: RemoteAIGradeResponse }) {
               <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">Ajánlás</div>
               <div className="mt-1 text-slate-100">{result.recommended_action || "-"}</div>
             </div>
-          </div>
+          </div>}
           {issues.length > 0 && (
             <div>
               <div className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">Detected issues</div>
@@ -1690,6 +1715,17 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
               <EmptyState label="A report még nincs elkészítve. Indíts score/report frissítést." />
             ) : (
               <div className="space-y-4">
+                {report.analysis_scope === "partial" && (
+                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
+                    <div className="mb-1 inline-flex rounded-full border border-amber-500/40 px-2 py-0.5 text-xs">Részleges elemzés</div>
+                    <div>Csak egy kép vagy hiányos képsor alapján készült, ezért nem teljes grading.</div>
+                  </div>
+                )}
+                {(report.warnings ?? []).length > 0 && (
+                  <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
+                    {(report.warnings ?? []).map((warning) => <div key={warning}>{aiWarningText(warning)}</div>)}
+                  </div>
+                )}
                 <div className="grid grid-cols-2 gap-2">
                   <StatCard label="Overall score" value={formatNumber(report.scores.overall_score)} tone="good" />
                   <StatCard label="Grade range" value={`${report.estimated_grade_range.estimated_grade_low ?? "-"} - ${report.estimated_grade_range.estimated_grade_high ?? "-"}`} tone="warn" />
@@ -1709,17 +1745,28 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                     </div>
                   </div>
                 )}
-                <div className="grid grid-cols-2 gap-2">
-                  <StatCard label="PSA 10 %" value={formatNumber(report.probabilities.psa_10_probability, 0)} />
-                  <StatCard label="PSA 9 %" value={formatNumber(report.probabilities.psa_9_probability, 0)} />
-                  <StatCard label="PSA 8 %" value={formatNumber(report.probabilities.psa_8_probability, 0)} />
-                  <StatCard label="PSA 7- %" value={formatNumber(report.probabilities.psa_7_or_lower_probability, 0)} />
-                </div>
+                {report.analysis_scope !== "partial" && (
+                  <div className="grid grid-cols-2 gap-2">
+                    <StatCard label="PSA 10 %" value={formatNumber(report.probabilities.psa_10_probability, 0)} />
+                    <StatCard label="PSA 9 %" value={formatNumber(report.probabilities.psa_9_probability, 0)} />
+                    <StatCard label="PSA 8 %" value={formatNumber(report.probabilities.psa_8_probability, 0)} />
+                    <StatCard label="PSA 7- %" value={formatNumber(report.probabilities.psa_7_or_lower_probability, 0)} />
+                  </div>
+                )}
                 <div className="rounded-lg border border-slate-800 bg-charcoal-900 p-4 text-sm leading-6 text-slate-300">{report.human_summary}</div>
                 <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-4 text-sm text-amber-100">
                   <div className="font-semibold">{report.recommendation ?? "-"}</div>
                   <p className="mt-2 leading-6">{report.recommendation_reason}</p>
                 </div>
+                <details className="rounded-lg border border-slate-800 bg-slate-950/25 p-3 text-sm text-slate-300">
+                  <summary className="cursor-pointer font-medium">AI grading debug</summary>
+                  <div className="mt-3 space-y-2 text-xs text-slate-400">
+                    <div>Scope: {report.analysis_scope ?? "-"}</div>
+                    <div>Images: {(report.image_labels_sent ?? []).join(", ") || "-"}</div>
+                    <div>Allowed areas: {(report.allowed_issue_areas ?? []).join(", ") || "-"}</div>
+                    <div>Warnings: {(report.warnings ?? []).join(", ") || "-"}</div>
+                  </div>
+                </details>
 
                 <InlineNotice notice={notice} scope="report" />
 
