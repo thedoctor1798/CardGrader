@@ -6,6 +6,7 @@ import { api, mediaUrl } from "../api/client";
 import type {
   AnalysisAsset,
   AnalysisFinding,
+  AnalysisImagePayload,
   AnalysisReport,
   AnalysisRun,
   Card,
@@ -302,7 +303,30 @@ function aiWarningText(warning: string): string {
   if (warning === "model_grade_low_without_visible_evidence") {
     return "A modell alacsonyabb grade-et jelzett látható indok nélkül, ezért a bizalom csökkentve lett.";
   }
+  if (warning === "possible_stale_image_payload") {
+    return "Figyelem: ez az AI futás ugyanazt a képet kapta, mint egy korábbi másik kártya elemzése.";
+  }
   return warning;
+}
+
+function ImagePayloadDebug({ payload }: { payload?: AnalysisImagePayload[] }) {
+  if (!payload?.length) return null;
+  return (
+    <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-xs text-slate-300">
+      <div className="mb-2 font-semibold text-slate-200">Image payload</div>
+      <div className="space-y-2">
+        {payload.map((item, index) => (
+          <div key={`${item.asset_id ?? index}-${item.image_hash_short ?? index}`} className="rounded border border-slate-800 p-2">
+            <div className="font-medium text-slate-100">{item.image_label ?? item.asset_label ?? "image"} · {item.image_hash_short ?? "-"}</div>
+            <div className="mt-1 text-slate-400">
+              asset #{item.asset_id ?? "-"} · media #{item.media_id ?? "-"} · {item.width ?? "-"}x{item.height ?? "-"} · {item.file_size ?? "-"} bytes
+            </div>
+            <div className="mt-1 break-all text-slate-500">{item.relative_path ?? item.filename ?? "-"}</div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
 }
 
 function RemoteAIGradePanel({ response }: { response: RemoteAIGradeResponse }) {
@@ -310,6 +334,8 @@ function RemoteAIGradePanel({ response }: { response: RemoteAIGradeResponse }) {
   const issues = Array.isArray(result.detected_issues) ? result.detected_issues : [];
   const metaWarnings = (response.worker_meta as { warnings?: unknown } | undefined)?.warnings;
   const warnings = response.warnings ?? (Array.isArray(metaWarnings) ? metaWarnings.map(String) : []);
+  const metaPayload = (response.worker_meta as { image_payload?: unknown } | undefined)?.image_payload;
+  const imagePayload = response.image_payload ?? (Array.isArray(metaPayload) ? metaPayload as AnalysisImagePayload[] : []);
   const isPartial = response.analysis_scope === "partial" || response.analysis_run?.analysis_scope === "partial";
   return (
     <div className={response.ok ? "mt-4 rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-4 text-sm text-emerald-50" : "mt-4 rounded-lg border border-rose-500/30 bg-rose-500/10 p-4 text-sm text-rose-100"}>
@@ -342,6 +368,7 @@ function RemoteAIGradePanel({ response }: { response: RemoteAIGradeResponse }) {
             <StatCard label="Surface" value={isPartial ? "-" : displayRemoteValue(result.subscores?.surface)} />
           </div>
           {result.summary && <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-slate-200">{result.summary}</div>}
+          <ImagePayloadDebug payload={imagePayload} />
           {!isPartial && <div className="grid gap-2 sm:grid-cols-2">
             <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">
               <div className="text-xs font-semibold uppercase tracking-wide text-slate-500">PSA 10 risk</div>
@@ -1128,9 +1155,10 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
     setBusyLabel("Local AI single-image debug...");
     setNotice(null);
     try {
-      const result = await api.runLocalAIDebugSingleImage(ownedCardId);
+      const imageLabel = selectedPreviewSide === "back" ? "back_resized" : "front_resized";
+      const result = await api.runLocalAIDebugSingleImage(ownedCardId, imageLabel);
       setLocalAIDebug(result);
-      setScopedSuccess("analysis", `Single-image debug: ${result.status}.`);
+      setScopedSuccess("analysis", `Single-image debug: ${result.status} (${imageLabel}).`);
       setError(null);
     } catch (err) {
       setScopedError("analysis", err instanceof Error ? err.message : "Local AI single-image debug hiba");
@@ -1597,6 +1625,9 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                     <span key={label} className="rounded-full border border-slate-700 px-2 py-0.5 text-xs text-slate-300">{label}</span>
                   ))}
                 </div>
+                <div className="mt-3">
+                  <ImagePayloadDebug payload={localAIDryRun.image_payload_would_send} />
+                </div>
                 <details className="mt-3">
                   <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-slate-500">Prompt preview</summary>
                   <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded bg-slate-950 p-3 text-xs text-slate-300">{localAIDryRun.prompt_preview}</pre>
@@ -1608,6 +1639,9 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                 <div className="font-medium">Local AI single-image debug: {localAIDebug.status}</div>
                 <div className="mt-1">Model: {localAIDebug.model}</div>
                 <div className="mt-1">Image: {localAIDebug.image_label_sent ?? "-"}</div>
+                <div className="mt-3">
+                  <ImagePayloadDebug payload={localAIDebug.image_payload} />
+                </div>
                 <div className="mt-1">Finish reason: {localAIDebug.finish_reason ?? "-"}</div>
                 <div className="mt-1">Reasoning content: {localAIDebug.reasoning_content_present ? "igen" : "nem"}</div>
                 <div className={localAIDebug.parsed_json_success ? "mt-1 text-emerald-200" : "mt-1 text-rose-200"}>
@@ -1765,6 +1799,9 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                     <div>Images: {(report.image_labels_sent ?? []).join(", ") || "-"}</div>
                     <div>Allowed areas: {(report.allowed_issue_areas ?? []).join(", ") || "-"}</div>
                     <div>Warnings: {(report.warnings ?? []).join(", ") || "-"}</div>
+                  </div>
+                  <div className="mt-3">
+                    <ImagePayloadDebug payload={report.image_payload} />
                   </div>
                 </details>
 

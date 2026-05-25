@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import logging
 import os
@@ -52,6 +53,15 @@ class WorkerImage(BaseModel):
     label: str
     mime_type: str = "image/jpeg"
     base64: str
+    media_id: int | str | None = None
+    asset_id: int | str | None = None
+    relative_path: str | None = None
+    filename: str | None = None
+    width: int | None = None
+    height: int | None = None
+    file_size: int | None = None
+    sha256: str | None = None
+    image_hash_short: str | None = None
 
 
 class GradeRequest(BaseModel):
@@ -62,6 +72,11 @@ class GradeRequest(BaseModel):
     language: str | None = None
     centering: dict[str, Any] = Field(default_factory=dict)
     images: list[WorkerImage] = Field(default_factory=list)
+    allowed_areas: list[str] = Field(default_factory=list)
+    image_labels: list[str] = Field(default_factory=list)
+    image_payload: list[dict[str, Any]] = Field(default_factory=list)
+    analysis_scope: str | None = None
+    prompt_rules: list[str] = Field(default_factory=list)
     grading_profile: str = "pokemon_tcg_default"
 
 
@@ -176,12 +191,37 @@ def validate_images(images: list[WorkerImage]) -> list[WorkerImage]:
             decoded = base64.b64decode(image.base64, validate=True)
         except Exception as exc:
             raise ValueError(f"Image {image.label} is not valid base64.") from exc
+        actual_hash = hashlib.sha256(decoded).hexdigest()
+        if image.sha256 and image.sha256 != actual_hash:
+            raise ValueError(f"Image {image.label} hash mismatch.")
+        image.sha256 = actual_hash
+        image.image_hash_short = actual_hash[:12]
+        image.file_size = len(decoded)
         if len(decoded) > max_bytes:
             raise ValueError(f"Image {image.label} exceeds {AI_WORKER_MAX_IMAGE_SIZE_MB} MB.")
         if not image.mime_type.startswith("image/"):
             raise ValueError(f"Image {image.label} has unsupported mime type {image.mime_type}.")
         validated.append(image)
     return validated
+
+
+def received_image_debug(images: list[WorkerImage]) -> dict[str, Any]:
+    return {
+        "received_image_count": len(images),
+        "received_image_labels": [image.label for image in images],
+        "received_image_hashes": [image.image_hash_short or (image.sha256 or "")[:12] for image in images],
+        "received_image_dimensions": [
+            {
+                "label": image.label,
+                "width": image.width,
+                "height": image.height,
+                "asset_id": image.asset_id,
+                "media_id": image.media_id,
+                "filename": image.filename,
+            }
+            for image in images
+        ],
+    }
 
 
 def build_prompt(request: GradeRequest) -> str:
@@ -201,6 +241,16 @@ Card metadata:
 - set: {request.set_name}
 - language: {request.language}
 - grading_profile: {request.grading_profile}
+- analysis_scope: {request.analysis_scope or "partial"}
+
+Images attached:
+{json.dumps(request.image_labels or [image.label for image in request.images], ensure_ascii=False)}
+
+Allowed issue areas:
+{json.dumps(request.allowed_areas, ensure_ascii=False)}
+
+Backend image payload identifiers:
+{json.dumps([{k: v for k, v in item.items() if k != "sha256"} for item in request.image_payload], ensure_ascii=False)}
 
 OpenCV/manual centering metrics are more reliable than visual guessing:
 {json.dumps(request.centering, ensure_ascii=False)}
@@ -219,28 +269,40 @@ Evaluate:
 
 Return JSON only. Do not write markdown. Start with {{ and end with }}.
 
-Use this exact JSON shape:
+Use this exact JSON shape. Do not copy the placeholder values; fill them only from visible evidence:
 {{
-  "estimated_grade": 8.5,
-  "grade_range": {{"low": 8, "high": 9}},
+  "estimated_grade": null,
+  "grade_range": {{"low": null, "high": null}},
   "confidence": "low | medium | high",
   "subscores": {{
-    "centering": 9,
-    "corners": 8,
-    "edges": 8,
-    "surface": 8
+    "centering": null,
+    "corners": null,
+    "edges": null,
+    "surface": null
   }},
   "detected_issues": [
     {{
-      "area": "back_top_left_corner",
+      "area": "one exact value from allowed_areas",
       "severity": "very_minor | minor | moderate | severe",
-      "description": "Small whitening visible on corner."
+      "description": "visible evidence only"
     }}
   ],
-  "summary": "Likely near mint, but minor whitening limits upside.",
+  "summary": "short visible-evidence summary",
   "psa_10_risk": "low | medium | high",
     "recommended_action": "grade_candidate | review_manually_before_grading | do_not_grade"
-}}{suffix}"""
+}}
+
+Rules:
+- Every detected_issues[].area must be exactly one value from allowed_areas.
+- Only report defects visible in the provided images.
+- If no clear defect is visible, detected_issues must be [].
+- Do not infer back defects from front images, or front defects from back images.
+- If only one image is provided, confidence cannot be high for a full-card grade.
+- Do not default to 8.5.
+- Do not invent whitening or reuse common whitening phrases unless visibly supported.
+- Do not mention an area if no matching image/crop was provided.
+- If uncertain, lower confidence instead of inventing defects.
+{suffix}"""
 
 
 def build_recognition_prompt(request: RecognizeCardRequest) -> str:
@@ -351,6 +413,7 @@ def grade_card(request: GradeRequest, _: None = Depends(require_token)) -> JSONR
     except ValueError as exc:
         logger.warning("Grade request validation failed: %s", exc)
         return JSONResponse({"ok": False, "error": "invalid_request", "message": str(exc)})
+    image_debug = received_image_debug(request.images)
 
     try:
         model = selected_model()
@@ -380,6 +443,7 @@ def grade_card(request: GradeRequest, _: None = Depends(require_token)) -> JSONR
                     "ok": False,
                     "error": "model_response_not_valid_json",
                     "raw_response_preview": raw_content[:1000],
+                    **image_debug,
                 }
             )
         logger.info("Grade request completed in %.2fs parse=ok", duration)
@@ -390,6 +454,7 @@ def grade_card(request: GradeRequest, _: None = Depends(require_token)) -> JSONR
                 "model": model,
                 "duration_seconds": duration,
                 "raw_response_preview": raw_content[:500],
+                **image_debug,
             }
         )
     except urllib.error.HTTPError as exc:
@@ -401,6 +466,7 @@ def grade_card(request: GradeRequest, _: None = Depends(require_token)) -> JSONR
                 "error": "lm_studio_http_error",
                 "message": f"LM Studio returned HTTP {exc.code}.",
                 "raw_response_preview": body[:1000],
+                **image_debug,
             }
         )
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
@@ -410,6 +476,7 @@ def grade_card(request: GradeRequest, _: None = Depends(require_token)) -> JSONR
                 "ok": False,
                 "error": "lm_studio_unreachable",
                 "message": "LM Studio is not reachable or timed out.",
+                **image_debug,
             }
         )
 

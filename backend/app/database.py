@@ -46,6 +46,7 @@ def ensure_sqlite_columns():
             "warnings_json": "TEXT",
             "model_parameters_json": "TEXT",
             "analysis_scope": "TEXT",
+            "image_payload_json": "TEXT",
         },
         "fx_rates": {
             "error_code": "TEXT",

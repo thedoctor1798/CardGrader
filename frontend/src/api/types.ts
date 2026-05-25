@@ -412,8 +412,27 @@ export type AnalysisRun = {
   warnings_json?: string | null;
   model_parameters_json?: string | null;
   analysis_scope?: string | null;
+  image_payload_json?: string | null;
   created_at: string;
   completed_at?: string | null;
+};
+
+export type AnalysisImagePayload = {
+  owned_card_id?: number | null;
+  card_id?: number | null;
+  media_id?: number | null;
+  asset_id?: number | null;
+  image_label?: string | null;
+  asset_label?: string | null;
+  asset_type?: string | null;
+  relative_path?: string | null;
+  filename?: string | null;
+  width?: number | null;
+  height?: number | null;
+  mime_type?: string | null;
+  file_size?: number | null;
+  sha256?: string | null;
+  image_hash_short?: string | null;
 };
 
 export type AnalysisAsset = {
@@ -542,6 +561,7 @@ export type AnalysisReport = {
   analysis_scope?: string | null;
   image_labels_sent?: string[];
   allowed_issue_areas?: string[];
+  image_payload?: AnalysisImagePayload[];
   latest_price?: PriceObservation | null;
   latest_centering?: CenteringMeasurement | null;
   opportunity_precheck?: OpportunityPrecheck | null;
@@ -636,6 +656,7 @@ export type LocalAIAnalysisResponse = {
   finding_count: number;
   images_sent?: number;
   image_labels_sent?: string[];
+  image_payload?: AnalysisImagePayload[];
   status: string;
 };
 
@@ -670,6 +691,7 @@ export type RemoteAIGradeResponse = {
   finding_count?: number;
   images_sent?: number;
   image_labels_sent?: string[];
+  image_payload?: AnalysisImagePayload[];
   allowed_issue_areas?: string[];
   warnings?: string[];
   analysis_scope?: string;
@@ -749,6 +771,7 @@ export type LocalAIDryRun = {
   max_tokens: number;
   images_would_send: number;
   image_labels_would_send: string[];
+  image_payload_would_send?: AnalysisImagePayload[];
   selected_asset_file_paths: string[];
   model_name: string;
   base_url: string;
@@ -759,6 +782,7 @@ export type LocalAIDebugSingleImageResponse = {
   status: string;
   model: string;
   image_label_sent?: string | null;
+  image_payload?: AnalysisImagePayload[];
   finish_reason?: string | null;
   content: string;
   reasoning_content_present: boolean;

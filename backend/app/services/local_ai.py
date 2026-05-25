@@ -1,4 +1,5 @@
 import base64
+import hashlib
 import json
 import mimetypes
 import re
@@ -10,6 +11,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from fastapi import HTTPException
+from PIL import Image, UnidentifiedImageError
 from sqlmodel import Session, select
 
 from ..config import (
@@ -567,6 +569,50 @@ def selected_asset_labels(assets: list[AnalysisAsset]) -> list[str]:
     return [asset.label or asset.file_path for asset in assets]
 
 
+def image_payload_metadata_for_asset(asset: AnalysisAsset, owned_card: OwnedCard | None = None, card: Card | None = None) -> dict[str, Any]:
+    path = local_path(asset.file_path)
+    image_bytes = path.read_bytes()
+    sha256 = hashlib.sha256(image_bytes).hexdigest()
+    width: int | None = None
+    height: int | None = None
+    try:
+        with Image.open(path) as image:
+            width, height = image.size
+    except (OSError, UnidentifiedImageError):
+        width = None
+        height = None
+    relative_path = str(path)
+    try:
+        relative_path = str(path.relative_to(ROOT))
+    except ValueError:
+        pass
+    return {
+        "owned_card_id": owned_card.id if owned_card else None,
+        "card_id": card.id if card else None,
+        "media_id": None,
+        "asset_id": asset.id,
+        "image_label": remote_worker_label(asset),
+        "asset_label": asset.label,
+        "asset_type": asset.asset_type,
+        "relative_path": relative_path.replace("\\", "/"),
+        "filename": path.name,
+        "width": width,
+        "height": height,
+        "mime_type": mimetypes.guess_type(path.name)[0] or "image/jpeg",
+        "file_size": len(image_bytes),
+        "sha256": sha256,
+        "image_hash_short": sha256[:12],
+    }
+
+
+def image_payload_metadata(
+    assets: list[AnalysisAsset],
+    owned_card: OwnedCard | None = None,
+    card: Card | None = None,
+) -> list[dict[str, Any]]:
+    return [image_payload_metadata_for_asset(asset, owned_card, card) for asset in assets]
+
+
 def allowed_areas_for_assets(assets: list[AnalysisAsset]) -> list[str]:
     allowed: list[str] = []
     for asset in assets:
@@ -598,12 +644,14 @@ def set_analysis_debug_metadata(
     allowed_areas: list[str],
     warnings: list[str],
     analysis_scope: str,
+    payload_metadata: list[dict[str, Any]] | None = None,
 ) -> None:
     analysis_run.image_labels_json = json.dumps(selected_asset_labels(assets), ensure_ascii=True)
     analysis_run.allowed_areas_json = json.dumps(allowed_areas, ensure_ascii=True)
     analysis_run.warnings_json = json.dumps(sorted(set(warnings)), ensure_ascii=True)
     analysis_run.model_parameters_json = json.dumps(model_parameters(), ensure_ascii=True)
     analysis_run.analysis_scope = analysis_scope
+    analysis_run.image_payload_json = json.dumps(payload_metadata or image_payload_metadata(assets), ensure_ascii=True, default=str)
 
 
 def add_warning(warnings: list[str], warning: str) -> None:
@@ -1194,6 +1242,7 @@ def dry_run_local_ai(session: Session, owned_card_id: int, pass_type: str = "fas
         "opencv_analysis_run_id": opencv_run.id,
         "images_would_send": len(assets),
         "image_labels_would_send": selected_asset_labels(assets),
+        "image_payload_would_send": image_payload_metadata(assets, owned_card, card),
         "selected_asset_file_paths": [asset.file_path for asset in assets],
         "max_images": LOCAL_AI_MAX_IMAGES,
         "max_tokens": LOCAL_AI_MAX_TOKENS,
@@ -1252,13 +1301,22 @@ def remote_worker_label(asset: AnalysisAsset) -> str:
     return label.replace("_resized", "_full")
 
 
-def remote_worker_image_payload(asset: AnalysisAsset) -> dict[str, str]:
+def remote_worker_image_payload(asset: AnalysisAsset, metadata: dict[str, Any] | None = None) -> dict[str, Any]:
     path = local_path(asset.file_path)
     mime_type = mimetypes.guess_type(path.name)[0] or "image/jpeg"
     return {
         "label": remote_worker_label(asset),
         "mime_type": mime_type,
         "base64": base64.b64encode(path.read_bytes()).decode("ascii"),
+        "media_id": metadata.get("media_id") if metadata else None,
+        "asset_id": metadata.get("asset_id") if metadata else asset.id,
+        "relative_path": metadata.get("relative_path") if metadata else str(asset.file_path),
+        "filename": metadata.get("filename") if metadata else path.name,
+        "width": metadata.get("width") if metadata else None,
+        "height": metadata.get("height") if metadata else None,
+        "file_size": metadata.get("file_size") if metadata else None,
+        "sha256": metadata.get("sha256") if metadata else None,
+        "image_hash_short": metadata.get("image_hash_short") if metadata else None,
     }
 
 
@@ -1268,8 +1326,14 @@ def remote_grade_payload(
     card: Card,
     opencv_run: AnalysisRun | None,
     assets: list[AnalysisAsset],
+    payload_metadata: list[dict[str, Any]] | None = None,
 ) -> dict[str, Any]:
     allowed_areas = allowed_areas_for_assets(assets)
+    metadata_by_asset_id = {
+        item.get("asset_id"): item
+        for item in (payload_metadata or image_payload_metadata(assets, owned_card, card))
+        if item.get("asset_id") is not None
+    }
     return {
         "card_id": str(card.id),
         "owned_card_id": str(owned_card.id),
@@ -1277,7 +1341,8 @@ def remote_grade_payload(
         "set_name": card.set_name,
         "language": card.language,
         "centering": remote_worker_centering_payload(session, owned_card.id, opencv_run),
-        "images": [remote_worker_image_payload(asset) for asset in assets],
+        "images": [remote_worker_image_payload(asset, metadata_by_asset_id.get(asset.id)) for asset in assets],
+        "image_payload": payload_metadata or list(metadata_by_asset_id.values()),
         "allowed_areas": allowed_areas,
         "image_labels": selected_asset_labels(assets),
         "analysis_scope": analysis_scope_for_assets(assets, "remote_ai_grade"),
@@ -1436,6 +1501,48 @@ def add_consistency_warnings(
         result["confidence"] = cap_confidence_level(result.get("confidence"), "low")
 
 
+def add_stale_image_payload_warnings(
+    session: Session,
+    owned_card_id: int,
+    payload_metadata: list[dict[str, Any]],
+    warnings: list[str],
+) -> None:
+    hashes = {
+        str(item.get("sha256") or "")
+        for item in payload_metadata
+        if item.get("sha256")
+    }
+    if not hashes:
+        return
+    previous_runs = session.exec(
+        select(AnalysisRun)
+        .where(AnalysisRun.owned_card_id != owned_card_id)
+        .where(AnalysisRun.image_payload_json.is_not(None))
+        .order_by(AnalysisRun.created_at.desc(), AnalysisRun.id.desc())
+        .limit(100)
+    ).all()
+    for previous_run in previous_runs:
+        previous_payload = parse_json_list_of_objects(previous_run.image_payload_json)
+        previous_hashes = {
+            str(item.get("sha256") or "")
+            for item in previous_payload
+            if item.get("sha256")
+        }
+        if hashes.intersection(previous_hashes):
+            add_warning(warnings, "possible_stale_image_payload")
+            return
+
+
+def parse_json_list_of_objects(value: str | None) -> list[dict[str, Any]]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    return [item for item in parsed if isinstance(item, dict)] if isinstance(parsed, list) else []
+
+
 def save_remote_worker_findings(session: Session, analysis_run: AnalysisRun, issues: Any) -> int:
     if not isinstance(issues, list):
         return 0
@@ -1491,9 +1598,11 @@ def run_remote_ai_grade(session: Session, owned_card_id: int) -> dict[str, Any]:
     allowed_areas = allowed_areas_for_assets(assets)
     image_labels = selected_asset_labels(assets)
     analysis_scope = analysis_scope_for_assets(assets, "remote_ai_grade")
+    payload_metadata = image_payload_metadata(assets, owned_card, card)
     guardrail_warnings: list[str] = []
     if analysis_scope == "partial":
         add_warning(guardrail_warnings, "limited_image_set")
+    add_stale_image_payload_warnings(session, owned_card_id, payload_metadata, guardrail_warnings)
 
     analysis_run = AnalysisRun(
         owned_card_id=owned_card_id,
@@ -1509,12 +1618,13 @@ def run_remote_ai_grade(session: Session, owned_card_id: int) -> dict[str, Any]:
         warnings_json=json.dumps(guardrail_warnings, ensure_ascii=True),
         model_parameters_json=json.dumps(model_parameters(), ensure_ascii=True),
         analysis_scope=analysis_scope,
+        image_payload_json=json.dumps(payload_metadata, ensure_ascii=True, default=str),
     )
     session.add(analysis_run)
     session.commit()
     session.refresh(analysis_run)
 
-    payload = remote_grade_payload(session, owned_card, card, opencv_run, assets)
+    payload = remote_grade_payload(session, owned_card, card, opencv_run, assets, payload_metadata)
     try:
         worker_response = remote_ai_grade_http(payload)
         save_text_asset(
@@ -1538,6 +1648,7 @@ def run_remote_ai_grade(session: Session, owned_card_id: int) -> dict[str, Any]:
                 "worker_result": worker_response,
                 "images_sent": len(assets),
                 "image_labels_sent": image_labels,
+                "image_payload": payload_metadata,
                 "allowed_issue_areas": allowed_areas,
                 "warnings": sorted(set(guardrail_warnings)),
                 "analysis_scope": analysis_scope,
@@ -1578,7 +1689,7 @@ def run_remote_ai_grade(session: Session, owned_card_id: int) -> dict[str, Any]:
             if analysis_scope == "partial"
             else f"PSA 10 risk: {result.get('psa_10_risk') or 'unknown'}"
         )
-        set_analysis_debug_metadata(analysis_run, assets, allowed_areas, guardrail_warnings, analysis_scope)
+        set_analysis_debug_metadata(analysis_run, assets, allowed_areas, guardrail_warnings, analysis_scope, payload_metadata)
         analysis_run.completed_at = datetime.utcnow()
         session.add(analysis_run)
         session.commit()
@@ -1596,10 +1707,16 @@ def run_remote_ai_grade(session: Session, owned_card_id: int) -> dict[str, Any]:
                 "allowed_issue_areas": allowed_areas,
                 "analysis_scope": analysis_scope,
                 "model_parameters": model_parameters(),
+                "image_payload": payload_metadata,
+                "worker_received_image_count": worker_response.get("received_image_count"),
+                "worker_received_image_labels": worker_response.get("received_image_labels"),
+                "worker_received_image_hashes": worker_response.get("received_image_hashes"),
+                "worker_received_image_dimensions": worker_response.get("received_image_dimensions"),
             },
             "finding_count": finding_count,
             "images_sent": len(assets),
             "image_labels_sent": image_labels,
+            "image_payload": payload_metadata,
             "allowed_issue_areas": allowed_areas,
             "warnings": sorted(set(guardrail_warnings)),
             "analysis_scope": analysis_scope,
@@ -1620,11 +1737,15 @@ def run_remote_ai_grade(session: Session, owned_card_id: int) -> dict[str, Any]:
         raise HTTPException(status_code=502, detail=f"Remote AI grading failed: {exc}") from exc
 
 
-def choose_single_debug_asset(assets: list[AnalysisAsset]) -> AnalysisAsset:
+def choose_single_debug_asset(assets: list[AnalysisAsset], preferred_label: str | None = None) -> AnalysisAsset:
+    if preferred_label:
+        selected = next((asset for asset in assets if asset.label == preferred_label), None)
+        if selected is not None:
+            return selected
     return next((asset for asset in assets if asset.label == "front_resized"), assets[0])
 
 
-def local_ai_debug_single_image(session: Session, owned_card_id: int) -> dict[str, Any]:
+def local_ai_debug_single_image(session: Session, owned_card_id: int, image_label: str | None = None) -> dict[str, Any]:
     owned_card = session.get(OwnedCard, owned_card_id)
     if owned_card is None:
         raise HTTPException(status_code=404, detail="Owned card not found")
@@ -1636,11 +1757,14 @@ def local_ai_debug_single_image(session: Session, owned_card_id: int) -> dict[st
     assets = collect_assets(session, opencv_run.id)
     if not assets:
         raise HTTPException(status_code=400, detail="No OpenCV assets found for local AI analysis.")
-    asset = choose_single_debug_asset(assets)
+    asset = choose_single_debug_asset(assets, image_label)
     debug_assets = [asset]
     allowed_areas = allowed_areas_for_assets(debug_assets)
     image_labels = selected_asset_labels(debug_assets)
+    card = session.get(Card, owned_card.card_id) if owned_card.card_id else None
+    payload_metadata = image_payload_metadata(debug_assets, owned_card, card)
     warnings = ["limited_image_set"]
+    add_stale_image_payload_warnings(session, owned_card_id, payload_metadata, warnings)
 
     analysis_run = AnalysisRun(
         owned_card_id=owned_card_id,
@@ -1655,6 +1779,7 @@ def local_ai_debug_single_image(session: Session, owned_card_id: int) -> dict[st
         warnings_json=json.dumps(warnings, ensure_ascii=True),
         model_parameters_json=json.dumps(model_parameters(), ensure_ascii=True),
         analysis_scope="partial",
+        image_payload_json=json.dumps(payload_metadata, ensure_ascii=True, default=str),
         recommendation="partial_analysis",
         recommendation_reason="Részleges elemzés, nem teljes grading.",
     )
@@ -1710,6 +1835,7 @@ def local_ai_debug_single_image(session: Session, owned_card_id: int) -> dict[st
             "status": "completed",
             "model": LOCAL_AI_MODEL_NAME,
             "image_label_sent": asset.label,
+            "image_payload": payload_metadata,
             "allowed_issue_areas": allowed_areas,
             "warnings": warnings,
             "analysis_scope": "partial",
@@ -1734,6 +1860,7 @@ def local_ai_debug_single_image(session: Session, owned_card_id: int) -> dict[st
             "status": "failed",
             "model": LOCAL_AI_MODEL_NAME,
             "image_label_sent": asset.label,
+            "image_payload": payload_metadata,
             "allowed_issue_areas": allowed_areas,
             "warnings": warnings,
             "analysis_scope": "partial",
@@ -1768,9 +1895,11 @@ def run_local_ai_pass(session: Session, owned_card_id: int, pass_type: str = "fa
     allowed_areas = allowed_areas_for_assets(assets)
     image_labels = selected_asset_labels(assets)
     analysis_scope = analysis_scope_for_assets(assets, pass_type)
+    payload_metadata = image_payload_metadata(assets, owned_card, card)
     guardrail_warnings: list[str] = []
     if analysis_scope == "partial":
         add_warning(guardrail_warnings, "limited_image_set")
+    add_stale_image_payload_warnings(session, owned_card_id, payload_metadata, guardrail_warnings)
 
     analysis_run = AnalysisRun(
         owned_card_id=owned_card_id,
@@ -1785,6 +1914,7 @@ def run_local_ai_pass(session: Session, owned_card_id: int, pass_type: str = "fa
         warnings_json=json.dumps(guardrail_warnings, ensure_ascii=True),
         model_parameters_json=json.dumps(model_parameters(), ensure_ascii=True),
         analysis_scope=analysis_scope,
+        image_payload_json=json.dumps(payload_metadata, ensure_ascii=True, default=str),
     )
     session.add(analysis_run)
     session.commit()
@@ -1832,7 +1962,7 @@ def run_local_ai_pass(session: Session, owned_card_id: int, pass_type: str = "fa
             if analysis_scope == "partial"
             else analysis_run.recommendation_reason
         )
-        set_analysis_debug_metadata(analysis_run, assets, allowed_areas, guardrail_warnings, analysis_scope)
+        set_analysis_debug_metadata(analysis_run, assets, allowed_areas, guardrail_warnings, analysis_scope, payload_metadata)
         analysis_run.completed_at = datetime.utcnow()
         session.add(analysis_run)
         session.commit()
@@ -1856,6 +1986,7 @@ def run_local_ai_pass(session: Session, owned_card_id: int, pass_type: str = "fa
             "finding_count": len(findings),
             "images_sent": len(assets),
             "image_labels_sent": image_labels,
+            "image_payload": payload_metadata,
             "allowed_issue_areas": allowed_areas,
             "warnings": sorted(set(guardrail_warnings)),
             "analysis_scope": analysis_scope,

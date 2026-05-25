@@ -38,6 +38,7 @@ class AnalysisRunRead(SQLModel):
     warnings_json: Optional[str] = None
     model_parameters_json: Optional[str] = None
     analysis_scope: Optional[str] = None
+    image_payload_json: Optional[str] = None
     created_at: datetime
     completed_at: Optional[datetime] = None
 
@@ -136,6 +137,7 @@ class AnalysisReportRead(SQLModel):
     analysis_scope: Optional[str] = None
     image_labels_sent: list[str] = Field(default_factory=list)
     allowed_issue_areas: list[str] = Field(default_factory=list)
+    image_payload: list[dict] = Field(default_factory=list)
     latest_price: Optional[PriceObservationRead] = None
     latest_centering: Optional[CenteringMeasurementRead] = None
     opportunity_precheck: Optional[GradingOpportunityRead] = None

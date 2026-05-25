@@ -90,6 +90,7 @@ def build_analysis_report(session: Session, analysis_run_id: int) -> dict:
         "analysis_scope": analysis_run.analysis_scope,
         "image_labels_sent": json_list(analysis_run.image_labels_json),
         "allowed_issue_areas": json_list(analysis_run.allowed_areas_json),
+        "image_payload": json_object_list(analysis_run.image_payload_json),
         "latest_price": latest_price,
         "latest_centering": latest_centering,
         "opportunity_precheck": opportunity,
@@ -109,3 +110,13 @@ def json_list(value: str | None) -> list[str]:
     except json.JSONDecodeError:
         return []
     return [str(item) for item in parsed] if isinstance(parsed, list) else []
+
+
+def json_object_list(value: str | None) -> list[dict]:
+    if not value:
+        return []
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError:
+        return []
+    return [item for item in parsed if isinstance(item, dict)] if isinstance(parsed, list) else []

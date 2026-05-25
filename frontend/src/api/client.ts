@@ -211,8 +211,8 @@ export const api = {
     request<LocalAIDryRun>(`/api/owned-cards/${ownedCardId}/analyze/local-ai-dry-run`, { method: "POST" }),
   runLocalAIDryRunForPass: (ownedCardId: number, passType: "front" | "back" | "fast" | "full") =>
     request<LocalAIDryRun>(`/api/owned-cards/${ownedCardId}/analyze/local-ai-dry-run?pass_type=${passType}`, { method: "POST" }),
-  runLocalAIDebugSingleImage: (ownedCardId: number) =>
-    request<LocalAIDebugSingleImageResponse>(`/api/owned-cards/${ownedCardId}/analyze/local-ai-debug-single-image`, { method: "POST" }),
+  runLocalAIDebugSingleImage: (ownedCardId: number, imageLabel?: string) =>
+    request<LocalAIDebugSingleImageResponse>(`/api/owned-cards/${ownedCardId}/analyze/local-ai-debug-single-image${imageLabel ? `?image_label=${encodeURIComponent(imageLabel)}` : ""}`, { method: "POST" }),
   scoreAnalysisRun: (analysisRunId: number) =>
     request<AnalysisRun>(`/api/analysis-runs/${analysisRunId}/score`, { method: "POST" }),
   annotateAnalysisRun: (analysisRunId: number) =>

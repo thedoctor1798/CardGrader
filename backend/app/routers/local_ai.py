@@ -94,6 +94,7 @@ def analyze_owned_card_local_ai_dry_run(
 @router.post("/owned-cards/{owned_card_id}/analyze/local-ai-debug-single-image")
 def analyze_owned_card_local_ai_debug_single_image(
     owned_card_id: int,
+    image_label: str | None = None,
     session: Session = Depends(get_session),
 ):
-    return local_ai_debug_single_image(session, owned_card_id)
+    return local_ai_debug_single_image(session, owned_card_id, image_label)

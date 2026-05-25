@@ -229,6 +229,7 @@ class AnalysisRun(SQLModel, table=True):
     warnings_json: Optional[str] = None
     model_parameters_json: Optional[str] = None
     analysis_scope: Optional[str] = None
+    image_payload_json: Optional[str] = None
     created_at: datetime = Field(default_factory=utc_now)
     completed_at: Optional[datetime] = None
 

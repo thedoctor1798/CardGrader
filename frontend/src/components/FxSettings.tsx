@@ -35,11 +35,14 @@ export function FxSettings() {
     try {
       const response = await api.refreshFxRates({ currencies: ["USD", "EUR"], target_currency: "HUF", force: true });
       setFx(response);
-      const blocked = response.rates.some((rate) => rate.error === "fx_provider_blocked_or_incompatible");
+      const blocked = response.rates.some((rate) => rate.error === "fx_provider_blocked" || rate.error === "fx_provider_blocked_or_incompatible");
+      const staticFallback = response.rates.some((rate) => rate.source === "static" && (rate.warning || rate.error));
       setMessage(response.ok
-        ? "Árfolyamok frissítve."
+        ? staticFallback
+          ? "Frankfurter sikertelen, statikus árfolyam használva."
+          : "Árfolyamok frissítve."
         : blocked
-          ? "Az árfolyam lekérése sikertelen. A Frankfurter blokkolta a kérést vagy inkompatibilis endpointot használtunk. Ellenőrizd az FX endpointot és a User-Agent beállítást."
+          ? "Frankfurter blokkolta az árfolyam lekérést vagy inkompatibilis endpointot használtunk. Ellenőrizd az FX endpointot és User-Agent beállítást."
           : "Az árfolyam frissítés részben sikertelen.");
     } catch (err) {
       setError(err instanceof Error ? err.message : "Árfolyam frissítési hiba.");
@@ -106,8 +109,11 @@ function FxInfo({ label, value, tone }: { label: string; value: string; tone?: "
 }
 
 function fxMessage(message?: string | null): string {
-  if (message === "fx_provider_blocked_or_incompatible") {
-    return "Az árfolyam lekérése sikertelen. A Frankfurter blokkolta a kérést vagy inkompatibilis endpointot használtunk.";
+  if (message === "fx_provider_blocked" || message === "fx_provider_blocked_or_incompatible") {
+    return "Frankfurter blokkolta az árfolyam lekérést vagy inkompatibilis endpointot használtunk. Ellenőrizd az FX endpointot és User-Agent beállítást.";
+  }
+  if (message === "Frankfurter failed, using configured static FX fallback.") {
+    return "Frankfurter sikertelen, statikus árfolyam használva.";
   }
   return message || "-";
 }

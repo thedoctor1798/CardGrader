@@ -440,7 +440,17 @@ When a provider stores a USD or EUR price, CardGrader fetches or reuses a cached
 
 If Frankfurter is unavailable and `PRICE_FX_USD_HUF` or `PRICE_FX_EUR_HUF` is configured, CardGrader uses that static fallback. If neither a provider rate nor a static rate is available, the original USD/EUR price remains stored, HUF converted fields stay null, and valuation warns instead of faking a conversion.
 
-If Frankfurter returns HTML or a Cloudflare-style 1010 response, the backend reports `fx_provider_blocked_or_incompatible` with the requested URL, HTTP status, content type, and a short response preview. The frontend shows a Hungarian troubleshooting message instead of only displaying `error code: 1010`.
+If Frankfurter returns HTTP 403, HTML, or a Cloudflare-style 1010 response, the backend reports `fx_provider_blocked` with the requested URL, HTTP status, content type, and a short response preview. The frontend shows a Hungarian troubleshooting message instead of only displaying `error code: 1010`:
+
+```text
+Frankfurter blokkolta az árfolyam lekérést vagy inkompatibilis endpointot használtunk. Ellenőrizd az FX endpointot és User-Agent beállítást.
+```
+
+If static fallback rates are configured, the UI reports:
+
+```text
+Frankfurter sikertelen, statikus árfolyam használva.
+```
 
 FX endpoints:
 
@@ -829,6 +839,9 @@ AI grading guardrails:
 - If the model reports a defect for an unprovided area, such as a back corner when only `front_resized` was sent, the backend removes that issue and stores `model_reported_issue_for_unprovided_area`.
 - If only one image or an incomplete image set is sent, the backend stores `limited_image_set` and caps confidence.
 - If a repeated/template-like issue phrase appears, the backend stores `repeated_template_issue_warning`.
+- Every AI request stores image payload metadata in `analysis_runs.image_payload_json`: owned/card ids, asset id, label, relative path, dimensions, MIME type, file size, SHA256, and a short hash. Base64 image content is never stored in this metadata.
+- The remote AI worker verifies image hashes and returns `received_image_count`, `received_image_labels`, `received_image_hashes`, and `received_image_dimensions`.
+- If a new run for another owned card uses the same image hash as a previous unrelated run, the backend stores `possible_stale_image_payload`.
 - The frontend shows these warnings and a partial-analysis badge instead of presenting the run as full grading.
 
 Remote worker grading prioritizes available assets in this order:

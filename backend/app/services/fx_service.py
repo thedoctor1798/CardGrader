@@ -235,7 +235,7 @@ def fetch_frankfurter_rate(base: str, target: str) -> FxRateResult:
         last_error = result
         if result.error == "fx_provider_timeout":
             continue
-        if result.error == "fx_provider_blocked_or_incompatible":
+        if result.error in {"fx_provider_blocked", "fx_provider_blocked_or_incompatible"}:
             continue
     return last_error or FxRateResult(
         ok=False,
@@ -281,7 +281,7 @@ def request_frankfurter_json(url: str, source: str, base: str, target: str) -> F
     except urllib.error.HTTPError as exc:
         body = exc.read().decode("utf-8", errors="replace")
         content_type = exc.headers.get("Content-Type", "")
-        if "1010" in body or "html" in content_type.lower():
+        if exc.code == 403 or "1010" in body or "html" in content_type.lower():
             return blocked_or_incompatible_result(base, target, source, url, exc.code, content_type, body)
         return FxRateResult(
             ok=False,
@@ -324,9 +324,9 @@ def blocked_or_incompatible_result(
         base_currency=base,
         target_currency=target,
         source=source,
-        warning="fx_provider_blocked_or_incompatible",
-        error="fx_provider_blocked_or_incompatible",
-        message="Frankfurter blocked the request or the adapter used an incompatible endpoint. Check FX endpoint and User-Agent settings.",
+        warning="fx_provider_blocked",
+        error="fx_provider_blocked",
+        message="Frankfurter blocked the request. Try setting FX_USER_AGENT or use static FX fallback.",
         requested_url=url,
         http_status=status,
         response_content_type=content_type,
@@ -412,6 +412,7 @@ def static_rate(base: str, target: str, warning: str | None = None) -> FxRateRes
         provider="static",
         source="static",
         warning=warning,
+        message="Frankfurter failed, using configured static FX fallback." if warning else None,
     )
 
 
