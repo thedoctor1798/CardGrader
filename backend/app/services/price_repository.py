@@ -275,6 +275,26 @@ def latest_successful_price(
     return latest_price_statement(session, card_id, None, at_or_before, include_any_owned=True)
 
 
+def latest_successful_price_for_source(
+    session: Session,
+    card_id: int,
+    source: str,
+    owned_card_id: int | None = None,
+) -> PriceHistory | None:
+    statement = (
+        select(PriceHistory)
+        .where(PriceHistory.card_id == card_id)
+        .where(PriceHistory.source == source)
+        .where(PriceHistory.error_code.is_(None))
+    )
+    if owned_card_id is not None:
+        statement = statement.where(PriceHistory.owned_card_id == owned_card_id)
+    else:
+        statement = statement.where(PriceHistory.owned_card_id.is_(None))
+    statement = statement.order_by(PriceHistory.fetched_at.desc(), PriceHistory.id.desc())
+    return session.exec(statement).first()
+
+
 def latest_price_statement(
     session: Session,
     card_id: int,

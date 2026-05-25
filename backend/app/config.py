@@ -55,6 +55,16 @@ def get_optional_float_env(name: str) -> float | None:
         return None
 
 
+def get_optional_int_env(name: str) -> int | None:
+    value = os.getenv(name)
+    if value is None or value.strip() == "":
+        return None
+    try:
+        return int(value)
+    except ValueError:
+        return None
+
+
 def get_clamped_int_env(name: str, default: int, minimum: int, maximum: int) -> int:
     return max(minimum, min(maximum, get_int_env(name, default)))
 
@@ -103,6 +113,75 @@ PRICE_SOURCES = get_csv_env("PRICE_SOURCES", ["manual", "local_json"])
 PRICE_FETCH_AFTER_RECOGNITION = get_bool_env("PRICE_FETCH_AFTER_RECOGNITION", False)
 PRICE_FX_EUR_HUF = get_optional_float_env("PRICE_FX_EUR_HUF")
 PRICE_FX_USD_HUF = get_optional_float_env("PRICE_FX_USD_HUF")
+PRICE_PROVIDER_CACHE_TTL_HOURS = get_int_env("PRICE_PROVIDER_CACHE_TTL_HOURS", 24)
+PRICE_EXTERNAL_FETCH_ENABLED = get_bool_env("PRICE_EXTERNAL_FETCH_ENABLED", True)
+PRICE_PROVIDER_MIN_MATCH_SCORE = get_int_env("PRICE_PROVIDER_MIN_MATCH_SCORE", 70)
+
+CONFIG_ENCRYPTION_KEY = os.getenv("CONFIG_ENCRYPTION_KEY", "")
+ALLOW_UNENCRYPTED_PROVIDER_SECRETS = get_bool_env("ALLOW_UNENCRYPTED_PROVIDER_SECRETS", False)
+
+POKETRACE_PLAN_PRESETS = {
+    "free": {
+        "daily_limit": 250,
+        "burst_limit": 1,
+        "burst_window_seconds": 2,
+        "expected_sources": ["eBay", "TCGPlayer"],
+    },
+    "pro": {
+        "daily_limit": 10000,
+        "burst_limit": 30,
+        "burst_window_seconds": 10,
+        "expected_sources": ["eBay", "TCGPlayer", "Cardmarket"],
+    },
+    "scale": {
+        "daily_limit": 100000,
+        "burst_limit": 60,
+        "burst_window_seconds": 10,
+        "expected_sources": ["eBay", "TCGPlayer", "Cardmarket"],
+    },
+}
+
+
+def get_poketrace_plan() -> str:
+    plan = os.getenv("POKETRACE_PLAN", "free").strip().lower() or "free"
+    return plan if plan in POKETRACE_PLAN_PRESETS else "free"
+
+
+def get_poketrace_plan_int(name: str, key: str) -> int:
+    plan = get_poketrace_plan()
+    explicit = get_optional_int_env(name)
+    if explicit is not None:
+        return explicit
+    return int(POKETRACE_PLAN_PRESETS[plan][key])
+
+
+POKETRACE_ENABLED = get_bool_env("POKETRACE_ENABLED", False)
+POKETRACE_API_KEY = os.getenv("POKETRACE_API_KEY", "")
+POKETRACE_BASE_URL = os.getenv("POKETRACE_BASE_URL", "https://api.poketrace.com/v1").rstrip("/")
+POKETRACE_MARKET = (os.getenv("POKETRACE_MARKET", "US").strip().upper() or "US")
+POKETRACE_TIMEOUT_SECONDS = get_int_env("POKETRACE_TIMEOUT_SECONDS", 30)
+POKETRACE_CACHE_TTL_HOURS = get_int_env("POKETRACE_CACHE_TTL_HOURS", PRICE_PROVIDER_CACHE_TTL_HOURS)
+POKETRACE_MIN_MATCH_SCORE = get_int_env("POKETRACE_MIN_MATCH_SCORE", PRICE_PROVIDER_MIN_MATCH_SCORE)
+POKETRACE_FETCH_HISTORY = get_bool_env("POKETRACE_FETCH_HISTORY", False)
+POKETRACE_HISTORY_PERIOD = os.getenv("POKETRACE_HISTORY_PERIOD", "30d")
+POKETRACE_PLAN = get_poketrace_plan()
+POKETRACE_DAILY_LIMIT = get_poketrace_plan_int("POKETRACE_DAILY_LIMIT", "daily_limit")
+POKETRACE_BURST_LIMIT = get_poketrace_plan_int("POKETRACE_BURST_LIMIT", "burst_limit")
+POKETRACE_BURST_WINDOW_SECONDS = get_poketrace_plan_int("POKETRACE_BURST_WINDOW_SECONDS", "burst_window_seconds")
+POKETRACE_RESPECT_RETRY_AFTER = get_bool_env("POKETRACE_RESPECT_RETRY_AFTER", True)
+
+TCGDEX_ENABLED = get_bool_env("TCGDEX_ENABLED", False)
+TCGDEX_BASE_URL = os.getenv("TCGDEX_BASE_URL", "https://api.tcgdex.net/v2").rstrip("/")
+TCGDEX_TIMEOUT_SECONDS = get_int_env("TCGDEX_TIMEOUT_SECONDS", 30)
+TCGDEX_RATE_LIMIT_SECONDS = get_float_env("TCGDEX_RATE_LIMIT_SECONDS", 2.0)
+TCGDEX_MIN_MATCH_SCORE = get_int_env("TCGDEX_MIN_MATCH_SCORE", PRICE_PROVIDER_MIN_MATCH_SCORE)
+
+POKEMONTCG_ENABLED = get_bool_env("POKEMONTCG_ENABLED", False)
+POKEMONTCG_API_KEY = os.getenv("POKEMONTCG_API_KEY", "")
+POKEMONTCG_BASE_URL = os.getenv("POKEMONTCG_BASE_URL", "https://api.pokemontcg.io/v2").rstrip("/")
+POKEMONTCG_TIMEOUT_SECONDS = get_int_env("POKEMONTCG_TIMEOUT_SECONDS", 30)
+POKEMONTCG_RATE_LIMIT_SECONDS = get_float_env("POKEMONTCG_RATE_LIMIT_SECONDS", 2.0)
+POKEMONTCG_MIN_MATCH_SCORE = get_int_env("POKEMONTCG_MIN_MATCH_SCORE", PRICE_PROVIDER_MIN_MATCH_SCORE)
 
 
 LOCAL_AI_MODES = {"disabled", "server_local", "remote_worker"}

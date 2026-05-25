@@ -10,6 +10,7 @@ from .core import (
     OwnedCard,
     PriceHistory,
     PriceObservation,
+    PriceProviderSetting,
     RecognitionAttempt,
     RecognitionCandidate,
 )
@@ -25,6 +26,7 @@ __all__ = [
     "OwnedCard",
     "PriceHistory",
     "PriceObservation",
+    "PriceProviderSetting",
     "RecognitionAttempt",
     "RecognitionCandidate",
 ]

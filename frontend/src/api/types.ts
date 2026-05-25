@@ -145,6 +145,10 @@ export type PriceFetchResult = {
   price_history_id?: number | null;
   source_card_id?: string | null;
   source_url?: string | null;
+  skipped?: boolean;
+  match_score?: number | null;
+  rate_limit_remaining?: number | null;
+  warning?: string | null;
   error?: string | null;
   message?: string | null;
   duration_seconds?: number | null;
@@ -184,6 +188,73 @@ export type PriceRefreshResponse = {
   failure_count: number;
   started_at: string;
   finished_at: string;
+  message?: string | null;
+};
+
+export type PriceProviderStatus = {
+  provider: "manual" | "local_json" | "poketrace" | "tcgdex" | "pokemontcg" | string;
+  enabled: boolean;
+  configured: boolean;
+  source: "database" | "env" | "default" | string;
+  missing: string[];
+  masked_api_key?: string | null;
+  secret_encrypted?: boolean;
+  plan?: "free" | "pro" | "scale" | string | null;
+  market?: "US" | "EU" | string | null;
+  base_url?: string | null;
+  daily_limit?: number | null;
+  burst_limit?: number | null;
+  burst_window_seconds?: number | null;
+  timeout_seconds?: number | null;
+  cache_ttl_hours?: number | null;
+  rate_limit_seconds?: number | null;
+  min_match_score?: number | null;
+  fetch_history?: boolean | null;
+  history_period?: string | null;
+  respect_retry_after?: boolean | null;
+  expected_sources?: string[];
+  path_info?: string | null;
+};
+
+export type PriceProvidersStatusResponse = {
+  ok: boolean;
+  providers: PriceProviderStatus[];
+};
+
+export type PriceProviderSettingsResponse = PriceProvidersStatusResponse;
+
+export type PriceProviderSettingsUpdate = {
+  enabled: boolean;
+  api_key?: string | null;
+  clear_secret?: boolean;
+  plan?: string | null;
+  market?: string | null;
+  base_url?: string | null;
+  daily_limit?: number | null;
+  burst_limit?: number | null;
+  burst_window_seconds?: number | null;
+  timeout_seconds?: number | null;
+  cache_ttl_hours?: number | null;
+  rate_limit_seconds?: number | null;
+  min_match_score?: number | null;
+  fetch_history?: boolean | null;
+  history_period?: string | null;
+  respect_retry_after?: boolean | null;
+};
+
+export type PriceProviderSettingResponse = {
+  ok: boolean;
+  provider: PriceProviderStatus;
+};
+
+export type PriceProviderTestResponse = {
+  ok: boolean;
+  provider: string;
+  configured: boolean;
+  plan?: string | null;
+  rate_limit_remaining?: number | null;
+  rate_limit?: Record<string, unknown> | null;
+  error?: string | null;
   message?: string | null;
 };
 

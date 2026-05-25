@@ -32,6 +32,11 @@ import type {
   PriceHistoryResponse,
   PriceLatestResponse,
   PriceObservation,
+  PriceProviderSettingResponse,
+  PriceProviderSettingsResponse,
+  PriceProviderSettingsUpdate,
+  PriceProviderTestResponse,
+  PriceProvidersStatusResponse,
   PriceRefreshResponse,
   ResetLocalDataResponse,
 } from "./types";
@@ -154,6 +159,15 @@ export const api = {
     }),
   refreshOwnedPrices: () => request<PriceRefreshResponse>("/api/prices/refresh-owned", { method: "POST" }),
   refreshAllPrices: () => request<PriceRefreshResponse>("/api/prices/refresh-all", { method: "POST" }),
+  getPriceProviderStatus: () => request<PriceProvidersStatusResponse>("/api/prices/providers/status"),
+  getPriceProviderSettings: () => request<PriceProviderSettingsResponse>("/api/settings/price-providers"),
+  updatePriceProviderSetting: (provider: string, body: PriceProviderSettingsUpdate) =>
+    request<PriceProviderSettingResponse>(`/api/settings/price-providers/${provider}`, {
+      method: "PUT",
+      body: JSON.stringify(body),
+    }),
+  testPriceProviderSetting: (provider: string) =>
+    request<PriceProviderTestResponse>(`/api/settings/price-providers/${provider}/test`, { method: "POST" }),
   createPrice: (cardId: number, body: Partial<PriceObservation>) =>
     request<PriceObservation>(`/api/cards/${cardId}/prices`, {
       method: "POST",

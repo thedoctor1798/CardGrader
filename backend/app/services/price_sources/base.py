@@ -46,6 +46,10 @@ class PriceSourceResult:
     condition_hint: Optional[str] = None
     raw_response: Any = None
     debug_metadata: dict[str, Any] = field(default_factory=dict)
+    skipped: bool = False
+    match_score: Optional[float] = None
+    rate_limit_remaining: Optional[int] = None
+    warning: Optional[str] = None
     error: Optional[str] = None
     message: Optional[str] = None
 

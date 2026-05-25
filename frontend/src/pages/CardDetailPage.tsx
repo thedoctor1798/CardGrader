@@ -17,6 +17,7 @@ import type {
   OwnedCard,
   PriceHistoryEntry,
   PriceObservation,
+  PriceProviderStatus,
   RemoteAIGradeResponse,
   RemoteAIWorkerResult,
   RecognitionResponse,
@@ -161,6 +162,27 @@ function legacyPriceToHistory(price: PriceObservation, ownedCardId: number): Pri
     created_at: price.observed_at,
     updated_at: price.observed_at,
   };
+}
+
+function priceProviderLabel(provider: string): string {
+  return {
+    auto: "Auto/provider chain",
+    manual: "Manual",
+    local_json: "Local JSON",
+    poketrace: "PokeTrace",
+    tcgdex: "TCGdex",
+    pokemontcg: "Pokemon TCG API",
+  }[provider] ?? provider;
+}
+
+function providerFetchErrorMessage(error?: string | null, fallback?: string | null): string {
+  if (error === "price_source_not_configured") return "Az árforrás nincs beállítva.";
+  if (error === "price_source_disabled") return "Az árforrás ki van kapcsolva.";
+  if (error === "provider_rate_limited") return "Rate limit elérve. Próbáld később.";
+  if (error === "provider_no_reliable_match") return "Nem találtunk elég biztos egyezést.";
+  if (error === "provider_no_price_available") return "Nem találtunk használható árat ennél a forrásnál.";
+  if (error === "provider_auth_failed") return "Az API kulcs elutasítva.";
+  return fallback || "Nem érkezett használható árforrásból adat.";
 }
 
 function optionalNumber(value: string): number | null {
@@ -433,6 +455,8 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const [media, setMedia] = useState<CardMedia[]>([]);
   const [latestPrice, setLatestPrice] = useState<PriceHistoryEntry | null>(null);
   const [priceHistory, setPriceHistory] = useState<PriceHistoryEntry[]>([]);
+  const [priceProviders, setPriceProviders] = useState<PriceProviderStatus[]>([]);
+  const [selectedPriceSource, setSelectedPriceSource] = useState("auto");
   const [latestCentering, setLatestCentering] = useState<CenteringMeasurement | null>(null);
   const [centeringMeasurements, setCenteringMeasurements] = useState<CenteringMeasurement[]>([]);
   const [analysisRuns, setAnalysisRuns] = useState<AnalysisRun[]>([]);
@@ -487,6 +511,11 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
         })),
     [priceHistory],
   );
+  const selectablePriceProviders = useMemo(
+    () => priceProviders.filter((provider) => ["poketrace", "tcgdex", "pokemontcg", "local_json"].includes(provider.provider)),
+    [priceProviders],
+  );
+  const poketraceStatus = priceProviders.find((provider) => provider.provider === "poketrace") ?? null;
 
   const setScopedSuccess = (scope: NoticeScope, text: string) => setNotice({ scope, tone: "success", text });
   const setScopedError = (scope: NoticeScope, text: string) => setNotice({ scope, tone: "error", text });
@@ -545,6 +574,12 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
         setLatestPrice(null);
         setPriceHistory([]);
         setPriceForm(emptyPriceForm);
+      }
+      try {
+        const providerStatus = await api.getPriceProviderStatus();
+        setPriceProviders(providerStatus.providers);
+      } catch {
+        setPriceProviders([]);
       }
 
       await loadReport(runsData[0]?.id ?? null);
@@ -723,12 +758,16 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
     setBusyLabel("Ár frissítése...");
     setNotice(null);
     try {
-      const result = await api.fetchCardPrices(ownedCard.card_id, { owned_card_id: ownedCard.id });
+      const result = await api.fetchCardPrices(ownedCard.card_id, {
+        owned_card_id: ownedCard.id,
+        sources: selectedPriceSource === "auto" ? undefined : [selectedPriceSource],
+      });
       await load(false);
       if (result.ok) {
         setScopedSuccess("price", `Árfrissítés kész: ${result.fetched_count} sikeres forrás.`);
       } else {
-        setScopedError("price", result.message || "Nem érkezett használható árforrásból adat.");
+        const firstError = result.results.find((item) => item.error);
+        setScopedError("price", providerFetchErrorMessage(firstError?.error, result.message || firstError?.message));
       }
     } catch (err) {
       setScopedError("price", err instanceof Error ? err.message : "Árfrissítési hiba");
@@ -1136,17 +1175,64 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
             title="Ár és értékelés"
             subtitle="Legutóbbi raw/graded árak a backend price_history táblából."
             action={
-              <button
-                className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 px-3 py-2 text-sm font-medium text-emerald-100 hover:bg-emerald-500/10 disabled:opacity-60"
-                disabled={busy}
-                onClick={fetchLatestPrice}
-                type="button"
-              >
-                <RefreshCw size={16} />
-                Ár frissítése
-              </button>
+              <div className="flex flex-wrap items-center gap-2">
+                <select
+                  className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-100"
+                  value={selectedPriceSource}
+                  onChange={(event) => setSelectedPriceSource(event.target.value)}
+                >
+                  <option value="auto">Auto/provider chain</option>
+                  {selectablePriceProviders.map((provider) => (
+                    <option key={provider.provider} disabled={!provider.enabled || !provider.configured} value={provider.provider}>
+                      {priceProviderLabel(provider.provider)}{provider.enabled && provider.configured ? "" : " (missing)"}
+                    </option>
+                  ))}
+                </select>
+                <button
+                  className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 px-3 py-2 text-sm font-medium text-emerald-100 hover:bg-emerald-500/10 disabled:opacity-60"
+                  disabled={busy}
+                  onClick={fetchLatestPrice}
+                  type="button"
+                >
+                  <RefreshCw size={16} />
+                  Ár frissítése
+                </button>
+              </div>
             }
           >
+            <div className="mb-4 space-y-3">
+              <div className="flex flex-wrap gap-2">
+                {priceProviders.map((provider) => (
+                  <span
+                    key={provider.provider}
+                    className={
+                      provider.enabled && provider.configured
+                        ? "rounded-full border border-emerald-500/30 px-2 py-1 text-xs text-emerald-200"
+                        : "rounded-full border border-slate-700 px-2 py-1 text-xs text-slate-400"
+                    }
+                  >
+                    {priceProviderLabel(provider.provider)}
+                  </span>
+                ))}
+              </div>
+              {poketraceStatus && poketraceStatus.enabled && !poketraceStatus.configured && (
+                <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
+                  PokeTrace API kulcs nincs beállítva. Beállítások → Árforrások.
+                </div>
+              )}
+              {poketraceStatus?.plan === "free" && (
+                <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-sm text-slate-400">
+                  PokeTrace Free csomagban Cardmarket és graded adat korlátozott lehet.
+                </div>
+              )}
+              <button
+                className="rounded-lg border border-slate-700 px-3 py-2 text-sm font-medium text-slate-300 hover:bg-slate-800"
+                onClick={() => { window.location.hash = "#/settings"; }}
+                type="button"
+              >
+                Árforrások beállítása
+              </button>
+            </div>
             {latestPrice ? (
               <div className="space-y-4">
                 <div className="grid grid-cols-2 gap-2">

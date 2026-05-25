@@ -1,5 +1,5 @@
 from datetime import date, datetime
-from typing import Optional
+from typing import Any, Optional
 
 from sqlmodel import SQLModel
 
@@ -96,6 +96,10 @@ class PriceFetchResultRead(SQLModel):
     price_history_id: Optional[int] = None
     source_card_id: Optional[str] = None
     source_url: Optional[str] = None
+    skipped: bool = False
+    match_score: Optional[float] = None
+    rate_limit_remaining: Optional[int] = None
+    warning: Optional[str] = None
     error: Optional[str] = None
     message: Optional[str] = None
     duration_seconds: Optional[float] = None
@@ -135,6 +139,76 @@ class PriceRefreshResponse(SQLModel):
     failure_count: int
     started_at: datetime
     finished_at: datetime
+    message: Optional[str] = None
+
+
+class PriceProviderStatusRead(SQLModel):
+    provider: str
+    enabled: bool
+    configured: bool
+    source: str
+    missing: list[str] = []
+    masked_api_key: Optional[str] = None
+    secret_encrypted: bool = False
+    plan: Optional[str] = None
+    market: Optional[str] = None
+    base_url: Optional[str] = None
+    daily_limit: Optional[int] = None
+    burst_limit: Optional[int] = None
+    burst_window_seconds: Optional[int] = None
+    timeout_seconds: Optional[int] = None
+    cache_ttl_hours: Optional[int] = None
+    rate_limit_seconds: Optional[float] = None
+    min_match_score: Optional[int] = None
+    fetch_history: Optional[bool] = None
+    history_period: Optional[str] = None
+    respect_retry_after: Optional[bool] = None
+    expected_sources: list[str] = []
+    path_info: Optional[str] = None
+
+
+class PriceProvidersStatusResponse(SQLModel):
+    ok: bool
+    providers: list[PriceProviderStatusRead]
+
+
+class PriceProviderSettingsUpdate(SQLModel):
+    enabled: bool = False
+    api_key: Optional[str] = None
+    clear_secret: bool = False
+    plan: Optional[str] = None
+    market: Optional[str] = None
+    base_url: Optional[str] = None
+    daily_limit: Optional[int] = None
+    burst_limit: Optional[int] = None
+    burst_window_seconds: Optional[int] = None
+    timeout_seconds: Optional[int] = None
+    cache_ttl_hours: Optional[int] = None
+    rate_limit_seconds: Optional[float] = None
+    min_match_score: Optional[int] = None
+    fetch_history: Optional[bool] = None
+    history_period: Optional[str] = None
+    respect_retry_after: Optional[bool] = None
+
+
+class PriceProviderSettingsResponse(SQLModel):
+    ok: bool
+    providers: list[PriceProviderStatusRead]
+
+
+class PriceProviderSettingResponse(SQLModel):
+    ok: bool
+    provider: PriceProviderStatusRead
+
+
+class PriceProviderTestResponse(SQLModel):
+    ok: bool
+    provider: str
+    configured: bool
+    plan: Optional[str] = None
+    rate_limit_remaining: Optional[int] = None
+    rate_limit: Optional[dict[str, Any]] = None
+    error: Optional[str] = None
     message: Optional[str] = None
 
 

@@ -15,11 +15,12 @@ from ..schemas import (
     PriceLatestResponse,
     PriceObservationCreate,
     PriceObservationRead,
+    PriceProvidersStatusResponse,
     PriceRefreshResponse,
     GradingOpportunityRead,
 )
 from ..services.price_repository import create_manual_price, latest_successful_price, list_price_history, require_card, require_owned_card
-from ..services.price_service import fetch_prices_for_card, refresh_prices
+from ..services.price_service import fetch_prices_for_card, price_provider_statuses, refresh_prices
 from ..services.pricing import (
     calculate_grading_opportunity,
     create_price_observation,
@@ -46,6 +47,11 @@ def create_manual_card_price(
     session: Session = Depends(get_session),
 ):
     return create_manual_price(session, payload)
+
+
+@router.get("/prices/providers/status", response_model=PriceProvidersStatusResponse)
+def get_price_provider_status(session: Session = Depends(get_session)):
+    return price_provider_statuses(session)
 
 
 @router.get("/prices/latest/{card_id}", response_model=PriceLatestResponse)

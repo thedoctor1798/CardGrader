@@ -5,6 +5,7 @@ import type { AppInfo, LocalAIConfig, LocalAIStatus, LocalAITestConnection } fro
 import { EmptyState } from "../components/EmptyState";
 import { LoadingState } from "../components/LoadingState";
 import { Panel } from "../components/Panel";
+import { PriceProviderSettings } from "../components/PriceProviderSettings";
 import { StatCard } from "../components/StatCard";
 
 export function SettingsPage() {
@@ -187,6 +188,8 @@ export function SettingsPage() {
           )}
         </Panel>
       )}
+
+      <PriceProviderSettings />
 
       <Panel title="Fejlesztői demo műveletek" subtitle="Csak lokális, single-user MVP használatra. Az originals media mappát egyik művelet sem törli.">
         <div className="grid gap-3 md:grid-cols-2">

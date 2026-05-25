@@ -112,6 +112,19 @@ class PriceHistory(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class PriceProviderSetting(SQLModel, table=True):
+    __tablename__ = "price_provider_settings"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    provider: str = Field(index=True, sa_column_kwargs={"unique": True})
+    enabled: bool = Field(default=False, index=True)
+    config_json: Optional[str] = None
+    secret_json: Optional[str] = None
+    secret_encrypted: bool = Field(default=False)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class AnalysisRun(SQLModel, table=True):
     __tablename__ = "analysis_runs"
 

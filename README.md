@@ -339,7 +339,60 @@ PRICE_SOURCES=manual,local_json
 PRICE_FETCH_AFTER_RECOGNITION=false
 PRICE_FX_EUR_HUF=
 PRICE_FX_USD_HUF=
+PRICE_PROVIDER_CACHE_TTL_HOURS=24
+PRICE_EXTERNAL_FETCH_ENABLED=true
+PRICE_PROVIDER_MIN_MATCH_SCORE=70
+
+# UI settings saved in /app/data override env values.
+CONFIG_ENCRYPTION_KEY=
+ALLOW_UNENCRYPTED_PROVIDER_SECRETS=false
+
+PRICE_SOURCES=manual,local_json,poketrace,tcgdex,pokemontcg
+POKETRACE_ENABLED=false
+POKETRACE_API_KEY=
+POKETRACE_PLAN=free
+POKETRACE_MARKET=US
+TCGDEX_ENABLED=false
+POKEMONTCG_ENABLED=false
+POKEMONTCG_API_KEY=
 ```
+
+#### Online Pricing Provider Strategy
+
+Phase 15.6.2 adds an online provider chain behind backend adapters:
+
+- `poketrace`: primary online provider. Uses `X-API-Key`, captures rate-limit headers, and maps raw plus PSA 7/8/9/10 prices when available.
+- `tcgdex`: free raw-price fallback using TCGPlayer/Cardmarket fields where present. Do not expect PSA prices.
+- `pokemontcg`: raw-price fallback using Pokémon TCG API TCGPlayer/Cardmarket fields. API key is optional but recommended for better limits.
+- `manual` and `local_json`: still work without external accounts.
+
+PokeTrace plan defaults:
+
+- Free: 250 requests/day, 1 request / 2 seconds, eBay + TCGPlayer, raw-focused.
+- Pro: 10k/day, 30 requests / 10 seconds, eBay + TCGPlayer + Cardmarket.
+- Scale: 100k/day, 60 requests / 10 seconds, eBay + TCGPlayer + Cardmarket.
+
+CardGrader does not scrape public HTML pages, Cardmarket pages, or TCGPlayer pages. External provider calls are rate-limited and cached by provider TTL.
+
+#### Configuring Price Providers From The UI
+
+Open `Beállítások` -> `Árforrások`.
+
+1. Enable PokeTrace, paste the API key, select plan and market, then save.
+2. Click `Test` to verify the backend can reach the provider.
+3. Enable TCGdex or Pokémon TCG API as raw-price fallbacks if desired.
+4. Open a card detail page, choose `Auto/provider chain` or a specific provider, then click `Ár frissítése`.
+
+Provider settings saved from the UI are stored server-side in the SQLite database under `/app/data`, so the Docker `./data:/app/data` volume preserves them across restarts, rebuilds, and git pulls. Database/UI settings override `.env` values until changed or cleared.
+
+Security notes:
+
+- API keys are sent to the backend only during save/update.
+- Full API keys are never returned to the frontend; the UI only receives masked values like `pt_****abcd`.
+- API keys are never stored in frontend localStorage.
+- Set `CONFIG_ENCRYPTION_KEY` to encrypt UI-stored provider secrets. Keep that key stable and backed up; changing it prevents existing encrypted secrets from being decrypted.
+- If you intentionally allow trusted-LAN plaintext storage for this local MVP, set `ALLOW_UNENCRYPTED_PROVIDER_SECRETS=true`.
+- Do not expose the Settings UI publicly without authentication/admin access.
 
 Manual prices work without external providers:
 
@@ -361,7 +414,9 @@ Read latest, history, and valuation:
 
 ```bash
 docker compose --env-file .env.server config | grep -E "PRICE_|CORS_ORIGINS|VITE_API_BASE_URL|published"
+docker compose --env-file .env.server config | grep -E "POKETRACE|TCGDEX|POKEMONTCG|PRICE_SOURCES"
 curl http://localhost:8710/api/health
+curl http://localhost:8710/api/prices/providers/status
 curl http://localhost:8710/api/prices/latest/1
 curl http://localhost:8710/api/prices/history/1
 curl http://localhost:8710/api/collection/valuation
@@ -405,7 +460,10 @@ Frontend behavior:
 
 Pricing troubleshooting:
 
-- No source configured: set `PRICE_SOURCES=manual,local_json` or add a future provider after it is implemented.
+- No source configured: set `PRICE_SOURCES=manual,local_json,poketrace,tcgdex,pokemontcg` and enable/configure the providers you want.
+- PokeTrace API key missing: open `Beállítások` -> `Árforrások`, or set `POKETRACE_API_KEY` in `.env.server`.
+- PokeTrace rate limited: wait for `Retry-After`/daily reset; CardGrader captures PokeTrace rate-limit headers in `debug_metadata_json`.
+- PokeTrace no reliable match: check local card name, set, and card number before storing an online price.
 - No price found: add a manual price or create a matching local JSON price file.
 - Provider timeout: increase `PRICE_REQUEST_TIMEOUT_SECONDS` and keep external providers rate-limited.
 - Unsupported currency: use `HUF`, `EUR`, or `USD`.
