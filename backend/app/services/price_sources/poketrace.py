@@ -4,6 +4,7 @@ from sqlmodel import Session
 
 from ...config import PRICE_EXTERNAL_FETCH_ENABLED
 from ...models import Card
+from ..price_provider_mappings import get_provider_mapping
 from ..provider_settings import EffectiveProviderConfig
 from .base import PriceData, PriceSource, PriceSourceResult
 from .common import (
@@ -39,7 +40,7 @@ class PokeTracePriceSource(PriceSource):
         card: Card,
         owned_card_id: int | None = None,
     ) -> PriceSourceResult:
-        del session, owned_card_id
+        del owned_card_id
         if not PRICE_EXTERNAL_FETCH_ENABLED:
             return self._error(card, "price_source_disabled", "External price fetching is disabled.")
         if not self.effective.enabled:
@@ -48,6 +49,10 @@ class PokeTracePriceSource(PriceSource):
             return self._error(card, "price_source_not_configured", "PokeTrace API key is not configured.")
 
         headers = {"X-API-Key": self.api_key, "Accept": "application/json"}
+        mapping = get_provider_mapping(session, self.source_name, card.id or 0) if card.id is not None else None
+        if mapping is not None:
+            return self._fetch_mapped_card(card, mapping.source_card_id, mapping.match_score, mapping.source_url, headers)
+
         search_terms = self._search_terms(card)
         search_url = build_url(
             str(self.config["base_url"]),
@@ -145,6 +150,69 @@ class PokeTracePriceSource(PriceSource):
             source_url=detail_url,
             prices=prices,
             confidence="high" if score >= 90 else "medium",
+            condition_hint=condition_hint,
+            raw_response=detail,
+            debug_metadata=debug_metadata,
+            match_score=score,
+            rate_limit_remaining=int_header(rate_limit, "X-RateLimit-Remaining"),
+            warning=warning,
+        )
+
+    def _fetch_mapped_card(
+        self,
+        card: Card,
+        source_card_id: str,
+        match_score: float | None,
+        mapped_source_url: str | None,
+        headers: dict[str, str],
+    ) -> PriceSourceResult:
+        detail_url = build_url(str(self.config["base_url"]), f"/cards/{source_card_id}")
+        debug_metadata: dict[str, Any] = {
+            "provider": self.source_name,
+            "mapping_source": "manual_provider_mapping",
+            "source_card_id": source_card_id,
+            "source_url": mapped_source_url or detail_url,
+            "match_score": match_score,
+        }
+        try:
+            detail_response = get_json(detail_url, headers=headers, timeout=int(self.config["timeout_seconds"]))
+        except ProviderHttpError as exc:
+            return self._http_error(card, exc, debug_metadata)
+
+        rate_limit = rate_limit_headers(detail_response.headers)
+        if rate_limit:
+            debug_metadata["rate_limit"] = rate_limit
+        if detail_response.status_code == 429:
+            return self._rate_limited(card, detail_response.data, rate_limit, debug_metadata)
+
+        detail = card_detail(detail_response.data) or {}
+        prices, condition_hint, mapping_warning = map_poketrace_price_data(detail, str(self.config.get("market") or "US"))
+        warning = mapping_warning or low_remaining_warning(rate_limit)
+        if prices is None or not prices.has_any_price():
+            return PriceSourceResult(
+                ok=False,
+                source=self.source_name,
+                card_id=card.id or 0,
+                source_card_id=source_card_id,
+                source_url=mapped_source_url or detail_url,
+                raw_response=detail,
+                debug_metadata=debug_metadata,
+                match_score=match_score,
+                rate_limit_remaining=int_header(rate_limit, "X-RateLimit-Remaining"),
+                warning=warning,
+                error="provider_no_price_available",
+                message="Mapped PokeTrace card did not return usable price data.",
+            )
+
+        score = match_score if match_score is not None else 100.0
+        return PriceSourceResult(
+            ok=True,
+            source=self.source_name,
+            card_id=card.id or 0,
+            source_card_id=source_card_id,
+            source_url=mapped_source_url or detail_url,
+            prices=prices,
+            confidence="manual" if match_score is None else ("high" if score >= 90 else "medium"),
             condition_hint=condition_hint,
             raw_response=detail,
             debug_metadata=debug_metadata,

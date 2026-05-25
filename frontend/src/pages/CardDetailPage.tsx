@@ -15,6 +15,7 @@ import type {
   LocalAIDebugSingleImageResponse,
   LocalAIStatus,
   OwnedCard,
+  PriceFetchResponse,
   PriceHistoryEntry,
   PriceObservation,
   PriceProviderStatus,
@@ -136,6 +137,39 @@ function priceValueHuf(price: PriceHistoryEntry | null, key: "raw" | "market" | 
   return null;
 }
 
+function sourcePriceValue(price: PriceHistoryEntry | null, key: "raw" | "market" | "psa_7" | "psa_8" | "psa_9" | "psa_10"): number | null {
+  if (!price) return null;
+  if (key === "raw") return price.raw_price ?? null;
+  if (key === "market") return price.market_price ?? null;
+  return price[key] ?? null;
+}
+
+function formatSourceCurrency(value: number | null, currency?: string | null): string {
+  if (value === null || value === undefined) return "-";
+  return new Intl.NumberFormat("hu-HU", {
+    style: "currency",
+    currency: currency || "HUF",
+    maximumFractionDigits: currency === "HUF" ? 0 : 2,
+  }).format(value);
+}
+
+function fxMetadata(price: PriceHistoryEntry | null): { provider?: string; rateDate?: string; source?: string; warning?: string } | null {
+  if (!price?.debug_metadata_json) return null;
+  try {
+    const parsed = JSON.parse(price.debug_metadata_json) as { fx?: Record<string, unknown> };
+    const fx = parsed.fx;
+    if (!fx) return null;
+    return {
+      provider: typeof fx.fx_provider === "string" ? fx.fx_provider : undefined,
+      rateDate: typeof fx.fx_rate_date === "string" ? fx.fx_rate_date : undefined,
+      source: typeof fx.fx_source === "string" ? fx.fx_source : undefined,
+      warning: typeof fx.fx_warning === "string" ? fx.fx_warning : undefined,
+    };
+  } catch {
+    return null;
+  }
+}
+
 function legacyPriceToHistory(price: PriceObservation, ownedCardId: number): PriceHistoryEntry {
   return {
     id: -price.id,
@@ -185,6 +219,36 @@ function providerFetchErrorMessage(error?: string | null, fallback?: string | nu
   return fallback || "Nem érkezett használható árforrásból adat.";
 }
 
+const marketPriceSources = new Set(["poketrace", "tcgdex", "pokemontcg", "local_json"]);
+
+function isMarketPrice(price: PriceHistoryEntry | null): boolean {
+  if (!price) return false;
+  return marketPriceSources.has((price.source ?? "").toLowerCase());
+}
+
+function priceHistoryMatchesFilter(price: PriceHistoryEntry, filter: string): boolean {
+  const source = (price.source ?? "").toLowerCase();
+  if (filter === "all") return true;
+  if (filter === "market") return marketPriceSources.has(source);
+  if (filter === "manual") return source === "manual";
+  return source === filter;
+}
+
+function sourcePriceDisplay(price: PriceHistoryEntry | null): string {
+  if (!price) return "-";
+  const value = price.market_price ?? price.raw_price ?? price.psa_10 ?? price.psa_9 ?? price.psa_8 ?? price.psa_7 ?? null;
+  return formatSourceCurrency(value, price.currency);
+}
+
+function fetchSuccessMessage(result: PriceFetchResponse): string {
+  const success = result.results.find((item) => item.ok && !item.skipped && item.source !== "manual") ?? result.results.find((item) => item.ok);
+  const value = success?.market_price ?? success?.raw_price ?? null;
+  if (success && value !== null) {
+    return `${priceProviderLabel(success.source)} sikeres: ${formatSourceCurrency(value, success.currency)}`;
+  }
+  return `Árfrissítés kész: ${result.fetched_count} sikeres forrás.`;
+}
+
 function optionalNumber(value: string): number | null {
   const normalized = value.trim().replace(",", ".");
   if (!normalized) return null;
@@ -198,6 +262,24 @@ function FieldLabel({ label, children }: { label: string; children: ReactNode })
       <span>{label}</span>
       {children}
     </label>
+  );
+}
+
+function PriceValueCard({ label, price, field }: { label: string; price: PriceHistoryEntry; field: "raw" | "market" | "psa_7" | "psa_8" | "psa_9" | "psa_10" }) {
+  const sourceValue = sourcePriceValue(price, field);
+  const hufValue = priceValueHuf(price, field);
+  const isConverted = price.currency !== "HUF";
+  return (
+    <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+      <div className="text-xs uppercase text-slate-500">{label}</div>
+      <div className="mt-1 text-lg font-semibold text-slate-50">{isConverted ? formatSourceCurrency(sourceValue, price.currency) : formatHuf(hufValue)}</div>
+      {isConverted && hufValue !== null && (
+        <div className="mt-1 text-sm text-emerald-200">≈ {formatHuf(hufValue)}</div>
+      )}
+      {isConverted && sourceValue !== null && hufValue === null && (
+        <div className="mt-1 text-xs text-amber-200">{price.currency} ár elérhető, de HUF konverzió még nincs.</div>
+      )}
+    </div>
   );
 }
 
@@ -454,7 +536,11 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const [card, setCard] = useState<Card | null>(null);
   const [media, setMedia] = useState<CardMedia[]>([]);
   const [latestPrice, setLatestPrice] = useState<PriceHistoryEntry | null>(null);
+  const [latestMarketPrice, setLatestMarketPrice] = useState<PriceHistoryEntry | null>(null);
+  const [latestManualOwnedPrice, setLatestManualOwnedPrice] = useState<PriceHistoryEntry | null>(null);
   const [priceHistory, setPriceHistory] = useState<PriceHistoryEntry[]>([]);
+  const [lastPriceFetchResult, setLastPriceFetchResult] = useState<PriceFetchResponse | null>(null);
+  const [historyFilter, setHistoryFilter] = useState("all");
   const [priceProviders, setPriceProviders] = useState<PriceProviderStatus[]>([]);
   const [selectedPriceSource, setSelectedPriceSource] = useState("auto");
   const [latestCentering, setLatestCentering] = useState<CenteringMeasurement | null>(null);
@@ -504,12 +590,13 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
     () =>
       priceHistory
         .filter((item) => !item.error_code)
+        .filter((item) => priceHistoryMatchesFilter(item, historyFilter))
         .map((item) => ({
           fetched_at: item.fetched_at,
           raw_market_huf: priceValueHuf(item, "market") ?? priceValueHuf(item, "raw"),
           psa_10_huf: priceValueHuf(item, "psa_10"),
         })),
-    [priceHistory],
+    [historyFilter, priceHistory],
   );
   const selectablePriceProviders = useMemo(
     () => priceProviders.filter((provider) => ["poketrace", "tcgdex", "pokemontcg", "local_json"].includes(provider.provider)),
@@ -554,24 +641,33 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
       setAnalysisRuns(runsData);
 
       try {
-        const [price, history] = await Promise.all([
+        const [price, market, history] = await Promise.all([
           api.getLatestOwnedCardPriceHistory(ownedCardId),
+          api.getOwnedCardMarketLatest(ownedCardId),
           api.getPriceHistory(owned.card_id),
         ]);
-        let latest = price.latest ?? history.latest ?? null;
+        let latestAny = price.latest_any ?? price.latest ?? history.latest ?? null;
+        let latestManualOwned = price.latest_manual_owned ?? market.latest_manual_owned ?? null;
+        let latestMarket = market.latest_market ?? price.latest_market ?? null;
         let historyItems = history.history;
-        if (!latest) {
+        if (!latestAny && !latestMarket && !latestManualOwned) {
           const legacyPrice = await api.getLatestOwnedCardPrice(ownedCardId);
           if (legacyPrice) {
-            latest = legacyPriceToHistory(legacyPrice, ownedCardId);
-            historyItems = [latest];
+            const legacyHistory = legacyPriceToHistory(legacyPrice, ownedCardId);
+            latestAny = legacyHistory;
+            latestManualOwned = legacyHistory;
+            historyItems = [legacyHistory];
           }
         }
-        setLatestPrice(latest);
+        setLatestPrice(latestAny);
+        setLatestMarketPrice(latestMarket);
+        setLatestManualOwnedPrice(latestManualOwned);
         setPriceHistory(historyItems);
-        setPriceForm(formFromPrice(latest));
+        setPriceForm(formFromPrice(latestManualOwned ?? (isMarketPrice(latestAny) ? null : latestAny)));
       } catch {
         setLatestPrice(null);
+        setLatestMarketPrice(null);
+        setLatestManualOwnedPrice(null);
         setPriceHistory([]);
         setPriceForm(emptyPriceForm);
       }
@@ -742,6 +838,10 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
         source_url: priceForm.source_url.trim() || null,
       });
       setLatestPrice(saved);
+      setLatestManualOwnedPrice(saved);
+      if (!latestMarketPrice || latestMarketPrice.price_kind === "manual_fallback") {
+        setLatestMarketPrice(saved);
+      }
       setPriceHistory((current) => [...current, saved].sort((a, b) => new Date(a.fetched_at).getTime() - new Date(b.fetched_at).getTime()));
       setPriceForm(formFromPrice(saved));
       if (latestAnalysis) await loadReport(latestAnalysis.id);
@@ -761,16 +861,42 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
       const result = await api.fetchCardPrices(ownedCard.card_id, {
         owned_card_id: ownedCard.id,
         sources: selectedPriceSource === "auto" ? undefined : [selectedPriceSource],
+        force: true,
       });
+      setLastPriceFetchResult(result);
       await load(false);
       if (result.ok) {
-        setScopedSuccess("price", `Árfrissítés kész: ${result.fetched_count} sikeres forrás.`);
+        setScopedSuccess("price", fetchSuccessMessage(result));
       } else {
         const firstError = result.results.find((item) => item.error);
         setScopedError("price", providerFetchErrorMessage(firstError?.error, result.message || firstError?.message));
       }
     } catch (err) {
       setScopedError("price", err instanceof Error ? err.message : "Árfrissítési hiba");
+    } finally {
+      setBusyLabel(null);
+    }
+  };
+
+  const saveProviderMapping = async (
+    provider: string,
+    candidate: { id?: string | number | null; name?: string | null; score?: number | null },
+  ) => {
+    if (!ownedCard || candidate.id === null || candidate.id === undefined || candidate.id === "") return;
+    setBusyLabel("Provider mapping mentése...");
+    setNotice(null);
+    try {
+      await api.savePriceProviderMapping({
+        card_id: ownedCard.card_id,
+        provider,
+        source_card_id: String(candidate.id),
+        confidence: "manual",
+        match_score: candidate.score ?? null,
+        notes: candidate.name ? `Manual UI mapping: ${candidate.name}` : "Manual UI mapping",
+      });
+      setScopedSuccess("price", "Provider mapping mentve. A következő frissítés ezt a találatot használja.");
+    } catch (err) {
+      setScopedError("price", err instanceof Error ? err.message : "Provider mapping mentési hiba");
     } finally {
       setBusyLabel(null);
     }
@@ -1042,6 +1168,9 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
     }
   };
 
+  const displayMarketPrice = latestMarketPrice ?? (isMarketPrice(latestPrice) ? latestPrice : null);
+  const displayManualPrice = latestManualOwnedPrice ?? (!isMarketPrice(latestPrice) ? latestPrice : null);
+
   if (loading) return <LoadingState label="Kártya részletek betöltése..." />;
   if (error && !ownedCard) return <EmptyState label={`Nem sikerült betölteni a kártyát: ${error}`} />;
   if (!ownedCard) return <EmptyState label="Owned card nem található." />;
@@ -1233,30 +1362,116 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                 Árforrások beállítása
               </button>
             </div>
-            {latestPrice ? (
-              <div className="space-y-4">
-                <div className="grid grid-cols-2 gap-2">
-                  <StatCard label="Raw ár" value={formatHuf(priceValueHuf(latestPrice, "raw"))} />
-                  <StatCard label="Market ár" value={formatHuf(priceValueHuf(latestPrice, "market"))} />
-                  <StatCard label="PSA 7" value={formatHuf(priceValueHuf(latestPrice, "psa_7"))} />
-                  <StatCard label="PSA 8" value={formatHuf(priceValueHuf(latestPrice, "psa_8"))} />
-                  <StatCard label="PSA 9" value={formatHuf(priceValueHuf(latestPrice, "psa_9"))} />
-                  <StatCard label="PSA 10" value={formatHuf(priceValueHuf(latestPrice, "psa_10"))} />
+            <div className="space-y-4">
+              <div>
+                <div className="mb-2 flex items-center justify-between gap-3">
+                  <h3 className="text-sm font-semibold text-slate-100">Aktuális piaci ár</h3>
+                  {displayMarketPrice && <span className="rounded-full border border-emerald-500/30 px-2 py-0.5 text-xs text-emerald-200">{displayMarketPrice.price_kind ?? "market"}</span>}
                 </div>
-                <div className="grid grid-cols-2 gap-2 text-xs text-slate-400">
-                  <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">Forrás: <span className="text-slate-100">{latestPrice.source}</span></div>
-                  <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">Confidence: <span className="text-slate-100">{latestPrice.confidence ?? "-"}</span></div>
-                  <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">Pénznem: <span className="text-slate-100">{latestPrice.currency}</span></div>
-                  <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">Frissítve: <span className="text-slate-100">{formatDate(latestPrice.fetched_at)}</span></div>
+                {displayMarketPrice ? (
+                  <div className="space-y-3">
+                    <div className="grid grid-cols-2 gap-2">
+                      <PriceValueCard field="raw" label="Raw ár" price={displayMarketPrice} />
+                      <PriceValueCard field="market" label="Market ár" price={displayMarketPrice} />
+                      <PriceValueCard field="psa_7" label="PSA 7" price={displayMarketPrice} />
+                      <PriceValueCard field="psa_8" label="PSA 8" price={displayMarketPrice} />
+                      <PriceValueCard field="psa_9" label="PSA 9" price={displayMarketPrice} />
+                      <PriceValueCard field="psa_10" label="PSA 10" price={displayMarketPrice} />
+                    </div>
+                    <div className="grid grid-cols-2 gap-2 text-xs text-slate-400">
+                      <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">Forrás: <span className="text-slate-100">{priceProviderLabel(displayMarketPrice.source)}</span></div>
+                      <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">Scope: <span className="text-slate-100">{displayMarketPrice.price_scope ?? "-"}</span></div>
+                      <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">Confidence: <span className="text-slate-100">{displayMarketPrice.confidence ?? "-"}</span></div>
+                      <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-3">Frissítve: <span className="text-slate-100">{formatDate(displayMarketPrice.fetched_at)}</span></div>
+                    </div>
+                    {displayMarketPrice.currency !== "HUF" && priceValueHuf(displayMarketPrice, "raw") === null && priceValueHuf(displayMarketPrice, "market") === null && (
+                      <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
+                        {displayMarketPrice.currency} ár elérhető, HUF konverzió nincs beállítva.
+                      </div>
+                    )}
+                    {fxMetadata(displayMarketPrice) && (
+                      <div className={fxMetadata(displayMarketPrice)?.warning ? "rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100" : "rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-sm text-slate-300"}>
+                        FX: {fxMetadata(displayMarketPrice)?.provider || "-"} · {fxMetadata(displayMarketPrice)?.rateDate || "-"} · {fxMetadata(displayMarketPrice)?.source || "-"}
+                      </div>
+                    )}
+                  </div>
+                ) : (
+                  <EmptyState label="Még nincs piaci ár. Futtasd az árfrissítést vagy adj meg kézi árat." />
+                )}
+              </div>
+
+              <div className="border-t border-slate-800 pt-4">
+                <h3 className="mb-2 text-sm font-semibold text-slate-100">Saját / manuális ár</h3>
+                <div className="grid gap-2 sm:grid-cols-2">
+                  <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+                    <div className="text-xs uppercase text-slate-500">Beszerzési ár</div>
+                    <div className="mt-1 text-lg font-semibold text-slate-50">{formatHuf(ownedCard.acquired_price_huf ?? null)}</div>
+                    <div className="mt-1 text-xs text-slate-500">{ownedCard.acquired_source ?? "-"}</div>
+                  </div>
+                  {displayManualPrice ? (
+                    <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-4">
+                      <div className="text-xs uppercase text-slate-500">Legutóbbi manuális owned ár</div>
+                      <div className="mt-1 text-lg font-semibold text-slate-50">{sourcePriceDisplay(displayManualPrice)}</div>
+                      <div className="mt-1 text-xs text-slate-500">{formatDate(displayManualPrice.fetched_at)} · {displayManualPrice.price_kind ?? "manual"}</div>
+                    </div>
+                  ) : (
+                    <div className="rounded-lg border border-slate-800 bg-slate-950/30 p-4 text-sm text-slate-400">Nincs külön manuális owned ár rögzítve.</div>
+                  )}
                 </div>
               </div>
-            ) : (
-              <EmptyState label="Még nincs ár rögzítve." />
-            )}
+
+              {lastPriceFetchResult && (
+                <div className="border-t border-slate-800 pt-4">
+                  <h3 className="mb-2 text-sm font-semibold text-slate-100">Provider eredmények</h3>
+                  <div className="space-y-2">
+                    {lastPriceFetchResult.results.map((result) => (
+                      <div key={`${result.source}-${result.price_history_id ?? result.error ?? "result"}`} className="rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-sm">
+                        <div className="flex flex-wrap items-center justify-between gap-2">
+                          <span className="font-medium text-slate-100">{priceProviderLabel(result.source)}</span>
+                          <span className={result.ok ? "text-emerald-200" : "text-amber-200"}>{result.ok ? `sikeres · ${formatSourceCurrency(result.market_price ?? result.raw_price ?? null, result.currency)}` : providerFetchErrorMessage(result.error, result.message)}</span>
+                        </div>
+                        <div className="mt-1 text-xs text-slate-500">
+                          {result.match_score !== null && result.match_score !== undefined ? `match_score ${formatNumber(result.match_score, 2)}` : "match_score -"}
+                          {result.skipped ? " · cache/skip" : ""}
+                          {result.rate_limit_remaining !== null && result.rate_limit_remaining !== undefined ? ` · remaining ${result.rate_limit_remaining}` : ""}
+                        </div>
+                        {result.candidate_alternatives && result.candidate_alternatives.length > 0 && (
+                          <div className="mt-3 space-y-1.5">
+                            {result.candidate_alternatives.map((candidate) => (
+                              <div key={`${result.source}-${candidate.id ?? candidate.name}`} className="flex flex-wrap items-center justify-between gap-2 rounded-lg border border-slate-800 bg-slate-950/40 px-3 py-2 text-xs text-slate-300">
+                                <span>{candidate.name ?? candidate.id ?? "-"} {candidate.number ? `#${candidate.number}` : ""} · {candidate.score ?? "-"}%</span>
+                                <button className="rounded-lg border border-blue-500/40 px-2 py-1 text-blue-100 hover:bg-blue-500/10 disabled:opacity-60" disabled={busy || !candidate.id} onClick={() => saveProviderMapping(result.source, candidate)} type="button">
+                                  Ezt használd ehhez a kártyához
+                                </button>
+                              </div>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
             <InlineNotice notice={notice} scope="price" />
           </Panel>
 
           <Panel title="Ártörténet" subtitle="Raw/market és PSA 10 trend a mentett price_history alapján.">
+            <div className="mb-3 flex flex-wrap items-center gap-2 text-sm">
+              <span className="text-slate-400">Szűrő:</span>
+              <select
+                className="rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-slate-100"
+                value={historyFilter}
+                onChange={(event) => setHistoryFilter(event.target.value)}
+              >
+                <option value="all">All</option>
+                <option value="market">Market only</option>
+                <option value="manual">Manual only</option>
+                <option value="poketrace">PokeTrace</option>
+                <option value="tcgdex">TCGdex</option>
+                <option value="pokemontcg">Pokemon TCG API</option>
+              </select>
+            </div>
             {priceChartData.length === 0 ? (
               <EmptyState label="Még nincs ártörténet." />
             ) : (

@@ -4,6 +4,7 @@ from sqlmodel import Session
 
 from ...config import PRICE_EXTERNAL_FETCH_ENABLED
 from ...models import Card
+from ..price_provider_mappings import get_provider_mapping
 from ..provider_settings import EffectiveProviderConfig
 from .base import PriceData, PriceSource, PriceSourceResult
 from .common import (
@@ -32,11 +33,14 @@ class TCGdexPriceSource(PriceSource):
         card: Card,
         owned_card_id: int | None = None,
     ) -> PriceSourceResult:
-        del session, owned_card_id
+        del owned_card_id
         if not PRICE_EXTERNAL_FETCH_ENABLED:
             return self._error(card, "price_source_disabled", "External price fetching is disabled.")
         if not self.effective.enabled:
             return self._error(card, "price_source_disabled", "TCGdex provider is disabled.")
+        mapping = get_provider_mapping(session, self.source_name, card.id or 0) if card.id is not None else None
+        if mapping is not None:
+            return self._fetch_mapped_card(card, mapping.source_card_id, mapping.match_score, mapping.source_url)
 
         search_url = build_url(
             str(self.config["base_url"]),
@@ -122,6 +126,68 @@ class TCGdexPriceSource(PriceSource):
             source_url=detail_url,
             prices=prices,
             confidence="high" if score >= 90 else "medium",
+            condition_hint="raw marketplace",
+            raw_response=detail,
+            debug_metadata=debug_metadata,
+            match_score=score,
+        )
+
+    def _fetch_mapped_card(
+        self,
+        card: Card,
+        source_card_id: str,
+        match_score: float | None,
+        mapped_source_url: str | None,
+    ) -> PriceSourceResult:
+        detail_url = build_url(str(self.config["base_url"]), f"/en/cards/{source_card_id}")
+        debug_metadata: dict[str, Any] = {
+            "provider": self.source_name,
+            "mapping_source": "manual_provider_mapping",
+            "source_card_id": source_card_id,
+            "source_url": mapped_source_url or detail_url,
+            "match_score": match_score,
+        }
+        try:
+            detail_response = get_json(detail_url, timeout=int(self.config["timeout_seconds"]))
+        except ProviderHttpError as exc:
+            return PriceSourceResult(
+                ok=False,
+                source=self.source_name,
+                card_id=card.id or 0,
+                source_card_id=source_card_id,
+                source_url=mapped_source_url or detail_url,
+                raw_response=exc.response.data if exc.response else None,
+                debug_metadata=debug_metadata,
+                match_score=match_score,
+                error="provider_error",
+                message=str(exc),
+            )
+
+        detail = card_detail(detail_response.data) or {}
+        prices = map_tcgdex_price_data(detail)
+        if prices is None or not prices.has_any_price():
+            return PriceSourceResult(
+                ok=False,
+                source=self.source_name,
+                card_id=card.id or 0,
+                source_card_id=source_card_id,
+                source_url=mapped_source_url or detail_url,
+                raw_response=detail,
+                debug_metadata=debug_metadata,
+                match_score=match_score,
+                error="provider_no_price_available",
+                message="Mapped TCGdex card did not return raw marketplace prices.",
+            )
+
+        score = match_score if match_score is not None else 100.0
+        return PriceSourceResult(
+            ok=True,
+            source=self.source_name,
+            card_id=card.id or 0,
+            source_card_id=source_card_id,
+            source_url=mapped_source_url or detail_url,
+            prices=prices,
+            confidence="manual" if match_score is None else ("high" if score >= 90 else "medium"),
             condition_hint="raw marketplace",
             raw_response=detail,
             debug_metadata=debug_metadata,

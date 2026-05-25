@@ -9,11 +9,14 @@ from ..config import PRICE_FETCH_ENABLED, PRICE_RATE_LIMIT_SECONDS, PRICE_SOURCE
 from ..models import Card, OwnedCard, PriceHistory
 from ..schemas import PriceFetchRequest, PriceFetchResponse, PriceFetchResultRead, PriceProvidersStatusResponse, PriceRefreshResponse
 from .price_repository import (
+    annotate_price_history,
     latest_successful_price_for_source,
     latest_successful_price,
     require_card,
     save_source_result,
     validate_owned_card_for_card,
+    price_kind_for,
+    price_scope_for,
 )
 from .price_sources import (
     LocalJsonPriceSource,
@@ -135,6 +138,11 @@ def fetch_prices_for_card(
                         source_card_id=cached.source_card_id,
                         source_url=cached.source_url,
                         skipped=True,
+                        raw_price=cached.raw_price,
+                        market_price=cached.market_price,
+                        currency=cached.currency,
+                        price_scope=price_scope_for(cached, request.owned_card_id),
+                        price_kind=price_kind_for(cached),
                         message="Using cached provider price data.",
                         duration_seconds=round(time.monotonic() - started, 4),
                     )
@@ -185,7 +193,7 @@ def fetch_prices_for_card(
 
         if result.ok:
             fetched_count += 1
-            latest_price = stored
+            latest_price = annotate_price_history(stored, request.owned_card_id)
             logger.info(
                 "price fetch success card_id=%s owned_card_id=%s source=%s duration=%s price_history_id=%s",
                 card_id,
@@ -214,6 +222,11 @@ def fetch_prices_for_card(
                 price_history_id=stored.id,
                 source_card_id=result.source_card_id,
                 source_url=result.source_url,
+                raw_price=stored.raw_price,
+                market_price=stored.market_price,
+                currency=stored.currency,
+                price_scope=price_scope_for(stored, request.owned_card_id),
+                price_kind=price_kind_for(stored),
                 error=result.error,
                 message=result.message,
                 duration_seconds=duration,
@@ -221,10 +234,16 @@ def fetch_prices_for_card(
                 match_score=result.match_score,
                 rate_limit_remaining=result.rate_limit_remaining,
                 warning=result.warning,
+                candidate_alternatives=result.debug_metadata.get("candidate_alternatives", [])
+                if isinstance(result.debug_metadata, dict)
+                else [],
             )
         )
 
-    latest_price = latest_price or latest_successful_price(session, card_id, request.owned_card_id)
+    latest_price = latest_price or annotate_price_history(
+        latest_successful_price(session, card_id, request.owned_card_id),
+        request.owned_card_id,
+    )
     if fetched_count == 0 and latest_price is not None and any(result.skipped and result.ok for result in results):
         return PriceFetchResponse(
             ok=True,

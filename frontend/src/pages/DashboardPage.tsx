@@ -142,12 +142,24 @@ export function DashboardPage() {
           value={valuation?.missing_price_cards ?? summary.cards_missing_price_total}
           tone={(valuation?.missing_price_cards ?? summary.cards_missing_price_total) > 0 ? "warn" : "good"}
         />
+        <StatCard
+          label="Hiányzó FX"
+          value={valuation?.missing_fx_cards ?? 0}
+          tone={(valuation?.missing_fx_cards ?? 0) > 0 ? "warn" : "good"}
+        />
         <StatCard label="Raw érték" value={formatHuf(valuation?.raw_value_huf)} />
         <StatCard label="Graded érték" value={formatHuf(valuation?.graded_value_huf)} />
         <StatCard label="24h változás" value={formatHuf(valuation?.price_change_24h_huf)} tone={(valuation?.price_change_24h_huf ?? 0) >= 0 ? "good" : "bad"} />
         <StatCard label="7d változás" value={formatHuf(valuation?.price_change_7d_huf)} tone={(valuation?.price_change_7d_huf ?? 0) >= 0 ? "good" : "bad"} />
         <StatCard label="Utolsó árfrissítés" value={formatDate(valuation?.latest_refresh_at)} />
+        <StatCard label="Utolsó FX" value={formatDate(valuation?.latest_fx_refresh_at)} />
       </div>
+
+      {valuation?.fx_warnings?.length ? (
+        <div className="rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
+          {valuation.fx_warnings.join(" ")}
+        </div>
+      ) : null}
 
       <Panel
         title="Snapshot alapú értéktrend"

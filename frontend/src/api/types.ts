@@ -114,6 +114,8 @@ export type PriceHistoryEntry = {
   error_message?: string | null;
   created_at: string;
   updated_at: string;
+  price_scope?: "owned_card" | "card" | "fallback_card" | string | null;
+  price_kind?: "manual_owned" | "manual_card" | "market_online" | "local_json" | "manual_fallback" | "unknown" | string | null;
 };
 
 export type ManualPriceCreate = {
@@ -149,6 +151,18 @@ export type PriceFetchResult = {
   match_score?: number | null;
   rate_limit_remaining?: number | null;
   warning?: string | null;
+  raw_price?: number | null;
+  market_price?: number | null;
+  currency?: string | null;
+  price_scope?: string | null;
+  price_kind?: string | null;
+  candidate_alternatives?: Array<{
+    id?: string | number | null;
+    name?: string | null;
+    number?: string | null;
+    score?: number | null;
+    match_reasons?: string[];
+  }>;
   error?: string | null;
   message?: string | null;
   duration_seconds?: number | null;
@@ -170,8 +184,37 @@ export type PriceLatestResponse = {
   card_id: number;
   owned_card_id?: number | null;
   latest?: PriceHistoryEntry | null;
+  latest_any?: PriceHistoryEntry | null;
+  latest_market?: PriceHistoryEntry | null;
+  latest_manual_owned?: PriceHistoryEntry | null;
   error?: string | null;
   message?: string | null;
+};
+
+export type PriceMarketLatestResponse = {
+  ok: boolean;
+  card_id: number;
+  owned_card_id?: number | null;
+  latest_market?: PriceHistoryEntry | null;
+  latest_manual_owned?: PriceHistoryEntry | null;
+  error?: string | null;
+  message?: string | null;
+};
+
+export type PriceProviderMappingCreate = {
+  card_id: number;
+  provider: string;
+  source_card_id: string;
+  source_url?: string | null;
+  confidence?: string | null;
+  match_score?: number | null;
+  notes?: string | null;
+};
+
+export type PriceProviderMapping = PriceProviderMappingCreate & {
+  id: number;
+  created_at: string;
+  updated_at: string;
 };
 
 export type PriceHistoryResponse = {
@@ -267,9 +310,42 @@ export type CollectionValuation = {
   owned_cards_count: number;
   unique_cards_count: number;
   missing_price_cards: number;
+  missing_fx_cards?: number;
+  fx_warnings?: string[];
+  fx_provider?: string | null;
+  latest_fx_refresh_at?: string | null;
   price_change_24h_huf?: number | null;
   price_change_7d_huf?: number | null;
   latest_refresh_at?: string | null;
+};
+
+export type FxRate = {
+  base_currency: string;
+  target_currency: string;
+  rate?: number | null;
+  rate_date?: string | null;
+  source?: string | null;
+  provider?: string | null;
+  fetched_at?: string | null;
+  expires_at?: string | null;
+  warning?: string | null;
+  error?: string | null;
+  message?: string | null;
+};
+
+export type FxRatesResponse = {
+  ok: boolean;
+  enabled: boolean;
+  provider: string;
+  target_currency: string;
+  cache_ttl_hours: number;
+  rates: FxRate[];
+};
+
+export type FxRefreshRequest = {
+  currencies?: string[];
+  target_currency?: string;
+  force?: boolean;
 };
 
 export type CollectionSummary = {

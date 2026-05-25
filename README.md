@@ -335,10 +335,17 @@ PRICE_REFRESH_INTERVAL_HOURS=24
 PRICE_DEFAULT_CURRENCY=HUF
 PRICE_RATE_LIMIT_SECONDS=3
 PRICE_REQUEST_TIMEOUT_SECONDS=30
-PRICE_SOURCES=manual,local_json
+PRICE_SOURCES=manual,local_json,poketrace,tcgdex,pokemontcg
 PRICE_FETCH_AFTER_RECOGNITION=false
 PRICE_FX_EUR_HUF=
 PRICE_FX_USD_HUF=
+FX_CONVERSION_ENABLED=true
+FX_DEFAULT_TARGET_CURRENCY=HUF
+FX_PROVIDER=frankfurter
+FX_PROVIDER_BASE_URL=https://api.frankfurter.dev/v1
+FX_CACHE_TTL_HOURS=12
+FX_TIMEOUT_SECONDS=15
+FX_FALLBACK_TO_STATIC_RATES=true
 PRICE_PROVIDER_CACHE_TTL_HOURS=24
 PRICE_EXTERNAL_FETCH_ENABLED=true
 PRICE_PROVIDER_MIN_MATCH_SCORE=70
@@ -347,7 +354,6 @@ PRICE_PROVIDER_MIN_MATCH_SCORE=70
 CONFIG_ENCRYPTION_KEY=
 ALLOW_UNENCRYPTED_PROVIDER_SECRETS=false
 
-PRICE_SOURCES=manual,local_json,poketrace,tcgdex,pokemontcg
 POKETRACE_ENABLED=false
 POKETRACE_API_KEY=
 POKETRACE_PLAN=free
@@ -394,6 +400,45 @@ Security notes:
 - If you intentionally allow trusted-LAN plaintext storage for this local MVP, set `ALLOW_UNENCRYPTED_PROVIDER_SECRETS=true`.
 - Do not expose the Settings UI publicly without authentication/admin access.
 
+#### Automatic HUF Conversion
+
+Phase 15.6.3 converts non-HUF provider prices to HUF automatically. The default FX provider is Frankfurter, a free no-key API using central-bank style reference rates. Rates are cached in the backend database under `/app/data`, so the Docker `./data:/app/data` volume preserves them across restarts and rebuilds.
+
+Default env:
+
+```text
+FX_CONVERSION_ENABLED=true
+FX_DEFAULT_TARGET_CURRENCY=HUF
+FX_PROVIDER=frankfurter
+FX_PROVIDER_BASE_URL=https://api.frankfurter.dev/v1
+FX_CACHE_TTL_HOURS=12
+FX_TIMEOUT_SECONDS=15
+FX_FALLBACK_TO_STATIC_RATES=true
+PRICE_FX_USD_HUF=
+PRICE_FX_EUR_HUF=
+```
+
+When a provider stores a USD or EUR price, CardGrader fetches or reuses a cached FX rate and fills `converted_currency=HUF` plus the `converted_*` fields in `price_history`. Applied FX metadata is stored in `debug_metadata_json`, including provider, rate, rate date, fetched time, source (`frankfurter`, `cache`, `static`, or `identity`), and any warning.
+
+If Frankfurter is unavailable and `PRICE_FX_USD_HUF` or `PRICE_FX_EUR_HUF` is configured, CardGrader uses that static fallback. If neither a provider rate nor a static rate is available, the original USD/EUR price remains stored, HUF converted fields stay null, and valuation warns instead of faking a conversion.
+
+FX endpoints:
+
+```bash
+curl http://localhost:8710/api/fx/rates
+
+curl -X POST http://localhost:8710/api/fx/refresh \
+  -H "Content-Type: application/json" \
+  -d '{"currencies":["USD","EUR"],"target_currency":"HUF","force":true}'
+```
+
+Frontend behavior:
+
+- Card detail shows original USD/EUR and approximate converted HUF when conversion exists.
+- If conversion is missing, card detail shows that the foreign-currency price exists but HUF conversion is missing.
+- Dashboard valuation uses converted HUF values and shows missing FX warnings.
+- Settings shows cached USD->HUF and EUR->HUF rates with a refresh button.
+
 Manual prices work without external providers:
 
 ```bash
@@ -414,10 +459,12 @@ Read latest, history, and valuation:
 
 ```bash
 docker compose --env-file .env.server config | grep -E "PRICE_|CORS_ORIGINS|VITE_API_BASE_URL|published"
-docker compose --env-file .env.server config | grep -E "POKETRACE|TCGDEX|POKEMONTCG|PRICE_SOURCES"
+docker compose --env-file .env.server config | grep -E "POKETRACE|TCGDEX|POKEMONTCG|PRICE_SOURCES|FX_"
 curl http://localhost:8710/api/health
+curl http://localhost:8710/api/fx/rates
 curl http://localhost:8710/api/prices/providers/status
 curl http://localhost:8710/api/prices/latest/1
+curl http://localhost:8710/api/owned-cards/1/prices/market-latest
 curl http://localhost:8710/api/prices/history/1
 curl http://localhost:8710/api/collection/valuation
 ```
@@ -448,14 +495,14 @@ curl -X POST http://localhost:8710/api/prices/refresh-all
 }
 ```
 
-Collection valuation uses the latest successful `price_history` row. Raw owned cards use market/raw price. Graded owned cards try a matching PSA grade when the owned copy text includes a PSA grade, then fall back to the nearest lower grade or raw price. Missing prices are counted and do not break valuation. HUF prices are copied into converted HUF fields; EUR/USD prices are stored as-is unless fixed `PRICE_FX_EUR_HUF` or `PRICE_FX_USD_HUF` is configured.
+Collection valuation prefers the latest online/card-level market row from `poketrace`, `tcgdex`, `pokemontcg`, or `local_json`. Manual owned-card prices remain visible as acquisition/manual context and are used only as a fallback when no market price exists. Raw owned cards use market/raw price. Graded owned cards try a matching PSA grade when the owned copy text includes a PSA grade, then fall back to the nearest lower grade or raw price. Missing prices are counted and do not break valuation. HUF prices are copied into converted HUF fields; USD/EUR and other supported currencies are converted through cached FX rates when available. Foreign-currency prices without HUF conversion are excluded from HUF valuation and counted as missing FX.
 
 Frontend behavior:
 
-- Card detail shows latest raw, market, PSA 7, PSA 8, PSA 9, PSA 10, source, confidence, and last fetch time.
+- Card detail separates `Aktuális piaci ár` from `Saját / manuális ár`, so an older manual owned-card row does not hide a newer PokeTrace market price.
 - Card detail can fetch configured sources with `Ár frissítése`.
 - Card detail can add a manual price with `Manuális ár hozzáadása`.
-- Card detail shows a simple raw/market and PSA 10 price history chart.
+- Card detail shows provider result details, match score, candidate alternatives when matching is uncertain, and a simple raw/market plus PSA 10 price history chart with source filters.
 - Dashboard shows total valuation, missing price count, 24h/7d change when history exists, and latest price refresh time.
 
 Pricing troubleshooting:
@@ -464,6 +511,7 @@ Pricing troubleshooting:
 - PokeTrace API key missing: open `Beállítások` -> `Árforrások`, or set `POKETRACE_API_KEY` in `.env.server`.
 - PokeTrace rate limited: wait for `Retry-After`/daily reset; CardGrader captures PokeTrace rate-limit headers in `debug_metadata_json`.
 - PokeTrace no reliable match: check local card name, set, and card number before storing an online price.
+- Provider matched the wrong card: use the candidate debug list on the owned-card detail page and click `Ezt használd ehhez a kártyához`; this stores a backend `price_provider_card_mappings` row for future exact provider fetches.
 - No price found: add a manual price or create a matching local JSON price file.
 - Provider timeout: increase `PRICE_REQUEST_TIMEOUT_SECONDS` and keep external providers rate-limited.
 - Unsupported currency: use `HUF`, `EUR`, or `USD`.

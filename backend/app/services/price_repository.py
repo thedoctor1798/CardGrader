@@ -4,12 +4,14 @@ from datetime import datetime
 from typing import Any
 
 from fastapi import HTTPException
+from sqlalchemy import or_
 from sqlmodel import Session, select
 
-from ..config import PRICE_DEFAULT_CURRENCY, PRICE_FX_EUR_HUF, PRICE_FX_USD_HUF
+from ..config import FX_DEFAULT_TARGET_CURRENCY, PRICE_DEFAULT_CURRENCY
 from ..models import Card, OwnedCard, PriceHistory, PriceObservation
 from ..models.core import utc_now
 from ..schemas import ManualPriceCreate
+from .fx_service import get_rate
 from .price_sources import PriceData, PriceSourceResult
 
 PRICE_VALUE_FIELDS = (
@@ -23,8 +25,43 @@ PRICE_VALUE_FIELDS = (
     "psa_10",
 )
 
-SUPPORTED_CURRENCIES = {"HUF", "EUR", "USD"}
+SUPPORTED_CURRENCIES = {
+    "AUD",
+    "BGN",
+    "BRL",
+    "CAD",
+    "CHF",
+    "CNY",
+    "CZK",
+    "DKK",
+    "EUR",
+    "GBP",
+    "HKD",
+    "HUF",
+    "IDR",
+    "ILS",
+    "INR",
+    "ISK",
+    "JPY",
+    "KRW",
+    "MXN",
+    "MYR",
+    "NOK",
+    "NZD",
+    "PHP",
+    "PLN",
+    "RON",
+    "SEK",
+    "SGD",
+    "THB",
+    "TRY",
+    "USD",
+    "ZAR",
+}
 logger = logging.getLogger(__name__)
+MARKET_PRICE_SOURCES = {"poketrace", "tcgdex", "pokemontcg", "local_json"}
+ONLINE_MARKET_PRICE_SOURCES = {"poketrace", "tcgdex", "pokemontcg"}
+MANUAL_PRICE_SOURCE = "manual"
 
 
 def require_card(session: Session, card_id: int) -> Card:
@@ -83,11 +120,20 @@ def json_dumps(value: Any) -> str | None:
     return json.dumps(value, ensure_ascii=True, default=str)
 
 
-def apply_currency_conversion(prices: PriceData, debug_metadata: dict[str, Any]) -> dict[str, Any]:
+def apply_currency_conversion(session: Session, prices: PriceData, debug_metadata: dict[str, Any]) -> dict[str, Any]:
     currency = validate_currency(prices.currency)
-    if currency == "HUF":
+    target_currency = FX_DEFAULT_TARGET_CURRENCY
+    if currency == target_currency:
+        debug_metadata["fx"] = {
+            "fx_provider": "identity",
+            "fx_rate": 1.0,
+            "fx_rate_date": utc_now().date().isoformat(),
+            "fx_source": "identity",
+            "base_currency": currency,
+            "target_currency": target_currency,
+        }
         return {
-            "converted_currency": "HUF",
+            "converted_currency": target_currency,
             "converted_market_price": prices.market_price,
             "converted_raw_price": prices.raw_price,
             "converted_psa_7": prices.psa_7,
@@ -96,9 +142,16 @@ def apply_currency_conversion(prices: PriceData, debug_metadata: dict[str, Any])
             "converted_psa_10": prices.psa_10,
         }
 
-    fx_rate = {"EUR": PRICE_FX_EUR_HUF, "USD": PRICE_FX_USD_HUF}.get(currency)
-    if fx_rate is None:
-        debug_metadata["fx"] = {"currency": currency, "target": "HUF", "configured": False}
+    fx_rate = get_rate(session, currency, target_currency)
+    if not fx_rate.ok or fx_rate.rate is None:
+        debug_metadata["fx"] = {
+            "fx_provider": fx_rate.provider,
+            "fx_source": fx_rate.source,
+            "base_currency": currency,
+            "target_currency": target_currency,
+            "fx_warning": fx_rate.warning or fx_rate.error or "fx_rate_unavailable",
+            "message": fx_rate.message,
+        }
         return {
             "converted_currency": None,
             "converted_market_price": None,
@@ -109,15 +162,24 @@ def apply_currency_conversion(prices: PriceData, debug_metadata: dict[str, Any])
             "converted_psa_10": None,
         }
 
-    debug_metadata["fx"] = {"currency": currency, "target": "HUF", "configured": True, "rate": fx_rate}
+    debug_metadata["fx"] = {
+        "fx_provider": fx_rate.provider,
+        "fx_rate": fx_rate.rate,
+        "fx_rate_date": fx_rate.rate_date.isoformat() if fx_rate.rate_date else None,
+        "fx_fetched_at": fx_rate.fetched_at.isoformat() if fx_rate.fetched_at else None,
+        "fx_source": fx_rate.source,
+        "base_currency": currency,
+        "target_currency": target_currency,
+        "fx_warning": fx_rate.warning,
+    }
     return {
-        "converted_currency": "HUF",
-        "converted_market_price": convert_price(prices.market_price, fx_rate),
-        "converted_raw_price": convert_price(prices.raw_price, fx_rate),
-        "converted_psa_7": convert_price(prices.psa_7, fx_rate),
-        "converted_psa_8": convert_price(prices.psa_8, fx_rate),
-        "converted_psa_9": convert_price(prices.psa_9, fx_rate),
-        "converted_psa_10": convert_price(prices.psa_10, fx_rate),
+        "converted_currency": target_currency,
+        "converted_market_price": convert_price(prices.market_price, fx_rate.rate),
+        "converted_raw_price": convert_price(prices.raw_price, fx_rate.rate),
+        "converted_psa_7": convert_price(prices.psa_7, fx_rate.rate),
+        "converted_psa_8": convert_price(prices.psa_8, fx_rate.rate),
+        "converted_psa_9": convert_price(prices.psa_9, fx_rate.rate),
+        "converted_psa_10": convert_price(prices.psa_10, fx_rate.rate),
     }
 
 
@@ -138,7 +200,7 @@ def save_source_result(
 
     prices = result.prices or PriceData(currency=PRICE_DEFAULT_CURRENCY)
     currency = validate_currency(prices.currency)
-    conversion = apply_currency_conversion(prices, debug_metadata) if result.ok else {
+    conversion = apply_currency_conversion(session, prices, debug_metadata) if result.ok else {
         "converted_currency": None,
         "converted_market_price": None,
         "converted_raw_price": None,
@@ -262,6 +324,45 @@ def value_as_huf(history: PriceHistory, price_name: str) -> float | None:
     return None
 
 
+def price_kind_for(history: PriceHistory | None, fallback: bool = False) -> str | None:
+    if history is None:
+        return None
+    source = (history.source or "").lower()
+    if fallback and source == MANUAL_PRICE_SOURCE:
+        return "manual_fallback"
+    if source == MANUAL_PRICE_SOURCE:
+        return "manual_owned" if history.owned_card_id is not None else "manual_card"
+    if source in ONLINE_MARKET_PRICE_SOURCES:
+        return "market_online"
+    if source == "local_json":
+        return "local_json"
+    return "unknown"
+
+
+def price_scope_for(history: PriceHistory | None, requested_owned_card_id: int | None = None) -> str | None:
+    if history is None:
+        return None
+    if history.owned_card_id is not None:
+        return "owned_card"
+    if requested_owned_card_id is not None:
+        return "fallback_card"
+    return "card"
+
+
+def annotate_price_history(
+    history: PriceHistory | None,
+    requested_owned_card_id: int | None = None,
+    price_scope: str | None = None,
+    price_kind: str | None = None,
+    manual_fallback: bool = False,
+) -> PriceHistory | None:
+    if history is None:
+        return None
+    setattr(history, "price_scope", price_scope or price_scope_for(history, requested_owned_card_id))
+    setattr(history, "price_kind", price_kind or price_kind_for(history, fallback=manual_fallback))
+    return history
+
+
 def latest_successful_price(
     session: Session,
     card_id: int,
@@ -273,6 +374,68 @@ def latest_successful_price(
         if latest_owned is not None:
             return latest_owned
     return latest_price_statement(session, card_id, None, at_or_before, include_any_owned=True)
+
+
+def latest_market_price(
+    session: Session,
+    card_id: int,
+    owned_card_id: int | None = None,
+    at_or_before: datetime | None = None,
+) -> PriceHistory | None:
+    statement = (
+        select(PriceHistory)
+        .where(PriceHistory.card_id == card_id)
+        .where(PriceHistory.source.in_(list(MARKET_PRICE_SOURCES)))
+        .where(PriceHistory.error_code.is_(None))
+    )
+    if owned_card_id is not None:
+        statement = statement.where(or_(PriceHistory.owned_card_id == owned_card_id, PriceHistory.owned_card_id.is_(None)))
+    else:
+        statement = statement.where(PriceHistory.owned_card_id.is_(None))
+    if at_or_before is not None:
+        statement = statement.where(PriceHistory.fetched_at <= at_or_before)
+    statement = statement.order_by(PriceHistory.fetched_at.desc(), PriceHistory.id.desc())
+    return session.exec(statement).first()
+
+
+def latest_manual_price(
+    session: Session,
+    card_id: int,
+    owned_card_id: int | None = None,
+    at_or_before: datetime | None = None,
+) -> PriceHistory | None:
+    statement = (
+        select(PriceHistory)
+        .where(PriceHistory.card_id == card_id)
+        .where(PriceHistory.source == MANUAL_PRICE_SOURCE)
+        .where(PriceHistory.error_code.is_(None))
+    )
+    if owned_card_id is not None:
+        statement = statement.where(PriceHistory.owned_card_id == owned_card_id)
+    else:
+        statement = statement.where(PriceHistory.owned_card_id.is_(None))
+    if at_or_before is not None:
+        statement = statement.where(PriceHistory.fetched_at <= at_or_before)
+    statement = statement.order_by(PriceHistory.fetched_at.desc(), PriceHistory.id.desc())
+    return session.exec(statement).first()
+
+
+def latest_market_with_manual_fallback(
+    session: Session,
+    card_id: int,
+    owned_card_id: int | None = None,
+    at_or_before: datetime | None = None,
+) -> tuple[PriceHistory | None, bool]:
+    market = latest_market_price(session, card_id, owned_card_id, at_or_before)
+    if market is not None:
+        return market, False
+    manual_owned = latest_manual_price(session, card_id, owned_card_id, at_or_before) if owned_card_id is not None else None
+    if manual_owned is not None:
+        return manual_owned, True
+    manual_card = latest_manual_price(session, card_id, None, at_or_before)
+    if manual_card is not None:
+        return manual_card, True
+    return None, False
 
 
 def latest_successful_price_for_source(
@@ -336,4 +499,7 @@ def list_price_history(
     if to_dt:
         statement = statement.where(PriceHistory.fetched_at <= to_dt)
     statement = statement.order_by(PriceHistory.fetched_at, PriceHistory.id)
-    return session.exec(statement).all()
+    history = session.exec(statement).all()
+    for item in history:
+        annotate_price_history(item)
+    return history

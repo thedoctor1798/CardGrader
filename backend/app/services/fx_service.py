@@ -1,0 +1,312 @@
+import json
+import logging
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from typing import Any
+
+from sqlmodel import Session, select
+
+from .. import config
+from ..models import FxRate
+from ..models.core import utc_now
+from .price_sources.common import ProviderHttpError, build_url, get_json
+
+logger = logging.getLogger(__name__)
+
+
+@dataclass
+class FxRateResult:
+    ok: bool
+    base_currency: str
+    target_currency: str
+    rate: float | None = None
+    rate_date: date | None = None
+    fetched_at: datetime | None = None
+    expires_at: datetime | None = None
+    provider: str = config.FX_PROVIDER
+    source: str | None = None
+    raw_response: Any = None
+    warning: str | None = None
+    error: str | None = None
+    message: str | None = None
+
+
+def get_rate(
+    session: Session,
+    base_currency: str,
+    target_currency: str | None = None,
+    force: bool = False,
+) -> FxRateResult:
+    base = normalize_currency(base_currency)
+    target = normalize_currency(target_currency or config.FX_DEFAULT_TARGET_CURRENCY)
+    if base == target:
+        now = utc_now()
+        return FxRateResult(
+            ok=True,
+            base_currency=base,
+            target_currency=target,
+            rate=1.0,
+            rate_date=now.date(),
+            fetched_at=now,
+            expires_at=now,
+            source="identity",
+        )
+
+    cached = latest_cached_rate(session, base, target)
+    if cached is not None and not force and cached.expires_at > utc_now():
+        return FxRateResult(
+            ok=True,
+            base_currency=base,
+            target_currency=target,
+            rate=cached.rate,
+            rate_date=cached.rate_date,
+            fetched_at=cached.fetched_at,
+            expires_at=cached.expires_at,
+            provider=cached.provider,
+            source="cache",
+            raw_response=parse_json(cached.raw_response_json),
+        )
+
+    if not config.FX_CONVERSION_ENABLED:
+        static = static_rate(base, target, "fx_conversion_disabled")
+        return static or FxRateResult(
+            ok=False,
+            base_currency=base,
+            target_currency=target,
+            source="disabled",
+            warning="fx_conversion_disabled",
+            error="fx_conversion_disabled",
+            message="FX conversion is disabled.",
+        )
+
+    provider_result = fetch_provider_rate(base, target)
+    if provider_result.ok and provider_result.rate is not None:
+        stored = save_fx_rate(session, provider_result)
+        return FxRateResult(
+            ok=True,
+            base_currency=base,
+            target_currency=target,
+            rate=stored.rate,
+            rate_date=stored.rate_date,
+            fetched_at=stored.fetched_at,
+            expires_at=stored.expires_at,
+            provider=stored.provider,
+            source=config.FX_PROVIDER,
+            raw_response=parse_json(stored.raw_response_json),
+        )
+
+    static = static_rate(base, target, provider_result.warning or provider_result.error)
+    if static is not None:
+        return static
+    if cached is not None:
+        return FxRateResult(
+            ok=False,
+            base_currency=base,
+            target_currency=target,
+            rate=None,
+            rate_date=cached.rate_date,
+            fetched_at=cached.fetched_at,
+            expires_at=cached.expires_at,
+            provider=cached.provider,
+            source="stale_cache",
+            raw_response=parse_json(cached.raw_response_json),
+            warning="fx_provider_failed_stale_cache_available",
+            error=provider_result.error,
+            message=provider_result.message,
+        )
+    return provider_result
+
+
+def refresh_rates(
+    session: Session,
+    currencies: list[str] | None = None,
+    target_currency: str | None = None,
+    force: bool = True,
+) -> list[FxRateResult]:
+    target = normalize_currency(target_currency or config.FX_DEFAULT_TARGET_CURRENCY)
+    requested = currencies or ["USD", "EUR"]
+    return [get_rate(session, currency, target, force=force) for currency in requested]
+
+
+def list_cached_rates(session: Session) -> list[FxRate]:
+    statement = select(FxRate).order_by(FxRate.base_currency, FxRate.target_currency, FxRate.rate_date.desc())
+    return session.exec(statement).all()
+
+
+def latest_fx_refresh_at(session: Session) -> datetime | None:
+    latest = session.exec(select(FxRate).order_by(FxRate.fetched_at.desc(), FxRate.id.desc())).first()
+    return latest.fetched_at if latest is not None else None
+
+
+def latest_cached_rate(session: Session, base: str, target: str) -> FxRate | None:
+    statement = (
+        select(FxRate)
+        .where(FxRate.provider == config.FX_PROVIDER)
+        .where(FxRate.base_currency == base)
+        .where(FxRate.target_currency == target)
+        .order_by(FxRate.rate_date.desc(), FxRate.fetched_at.desc(), FxRate.id.desc())
+    )
+    return session.exec(statement).first()
+
+
+def fetch_provider_rate(base: str, target: str) -> FxRateResult:
+    if config.FX_PROVIDER != "frankfurter":
+        return FxRateResult(
+            ok=False,
+            base_currency=base,
+            target_currency=target,
+            source=config.FX_PROVIDER,
+            warning="fx_provider_not_supported",
+            error="fx_provider_not_supported",
+            message=f"FX provider is not supported: {config.FX_PROVIDER}",
+        )
+
+    url = frankfurter_url(base, target)
+    try:
+        response = get_json(url, timeout=config.FX_TIMEOUT_SECONDS)
+    except TimeoutError as exc:
+        return FxRateResult(
+            ok=False,
+            base_currency=base,
+            target_currency=target,
+            source="frankfurter",
+            warning="fx_provider_timeout",
+            error="fx_provider_timeout",
+            message=str(exc) or "Frankfurter FX request timed out.",
+        )
+    except ProviderHttpError as exc:
+        return FxRateResult(
+            ok=False,
+            base_currency=base,
+            target_currency=target,
+            source="frankfurter",
+            warning="fx_provider_failed",
+            error="fx_provider_failed",
+            message=str(exc),
+            raw_response=exc.response.data if exc.response else None,
+        )
+
+    rate, rate_date = parse_frankfurter_response(response.data, target)
+    if rate is None or rate <= 0:
+        return FxRateResult(
+            ok=False,
+            base_currency=base,
+            target_currency=target,
+            source="frankfurter",
+            warning="fx_rate_missing",
+            error="fx_rate_missing",
+            message="Frankfurter response did not include the requested rate.",
+            raw_response=response.data,
+        )
+
+    now = utc_now()
+    return FxRateResult(
+        ok=True,
+        base_currency=base,
+        target_currency=target,
+        rate=rate,
+        rate_date=rate_date or now.date(),
+        fetched_at=now,
+        expires_at=now + timedelta(hours=config.FX_CACHE_TTL_HOURS),
+        provider="frankfurter",
+        source="frankfurter",
+        raw_response=response.data,
+    )
+
+
+def frankfurter_url(base: str, target: str) -> str:
+    if config.FX_PROVIDER_BASE_URL.endswith("/v2"):
+        return build_url(config.FX_PROVIDER_BASE_URL, f"/rate/{base}/{target}")
+    return build_url(config.FX_PROVIDER_BASE_URL, "/latest", {"base": base, "symbols": target})
+
+
+def parse_frankfurter_response(payload: Any, target: str) -> tuple[float | None, date | None]:
+    if isinstance(payload, dict):
+        rates = payload.get("rates")
+        if isinstance(rates, dict):
+            return optional_float(rates.get(target)), parse_date(payload.get("date"))
+        data = payload.get("data")
+        if isinstance(data, list) and data:
+            return parse_frankfurter_response(data[0], target)
+        if "rate" in payload:
+            return optional_float(payload.get("rate")), parse_date(payload.get("date"))
+    if isinstance(payload, list) and payload:
+        return parse_frankfurter_response(payload[0], target)
+    return None, None
+
+
+def save_fx_rate(session: Session, result: FxRateResult) -> FxRate:
+    rate_date = result.rate_date or utc_now().date()
+    existing = session.exec(
+        select(FxRate)
+        .where(FxRate.provider == result.provider)
+        .where(FxRate.base_currency == result.base_currency)
+        .where(FxRate.target_currency == result.target_currency)
+        .where(FxRate.rate_date == rate_date)
+    ).first()
+    now = result.fetched_at or utc_now()
+    rate = existing or FxRate(
+        provider=result.provider,
+        base_currency=result.base_currency,
+        target_currency=result.target_currency,
+        rate_date=rate_date,
+    )
+    rate.rate = float(result.rate or 0)
+    rate.fetched_at = now
+    rate.expires_at = result.expires_at or now + timedelta(hours=config.FX_CACHE_TTL_HOURS)
+    rate.raw_response_json = json.dumps(result.raw_response, ensure_ascii=True, default=str) if result.raw_response is not None else None
+    rate.updated_at = now
+    session.add(rate)
+    session.commit()
+    session.refresh(rate)
+    return rate
+
+
+def static_rate(base: str, target: str, warning: str | None = None) -> FxRateResult | None:
+    if not config.FX_FALLBACK_TO_STATIC_RATES or target != "HUF":
+        return None
+    rate = {"EUR": config.PRICE_FX_EUR_HUF, "USD": config.PRICE_FX_USD_HUF}.get(base)
+    if rate is None:
+        return None
+    now = utc_now()
+    return FxRateResult(
+        ok=True,
+        base_currency=base,
+        target_currency=target,
+        rate=rate,
+        rate_date=now.date(),
+        fetched_at=now,
+        expires_at=now,
+        provider="static",
+        source="static",
+        warning=warning,
+    )
+
+
+def normalize_currency(currency: str | None) -> str:
+    return (currency or config.FX_DEFAULT_TARGET_CURRENCY).strip().upper()
+
+
+def parse_date(value: Any) -> date | None:
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def optional_float(value: Any) -> float | None:
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def parse_json(value: str | None) -> Any:
+    if not value:
+        return None
+    try:
+        return json.loads(value)
+    except json.JSONDecodeError:
+        return None

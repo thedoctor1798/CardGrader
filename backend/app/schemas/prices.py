@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from typing import Any, Optional
 
-from sqlmodel import SQLModel
+from sqlmodel import Field, SQLModel
 
 
 class PriceObservationCreate(SQLModel):
@@ -65,6 +65,8 @@ class PriceHistoryRead(SQLModel):
     error_message: Optional[str] = None
     created_at: datetime
     updated_at: datetime
+    price_scope: Optional[str] = None
+    price_kind: Optional[str] = None
 
 
 class ManualPriceCreate(SQLModel):
@@ -100,6 +102,12 @@ class PriceFetchResultRead(SQLModel):
     match_score: Optional[float] = None
     rate_limit_remaining: Optional[int] = None
     warning: Optional[str] = None
+    raw_price: Optional[float] = None
+    market_price: Optional[float] = None
+    currency: Optional[str] = None
+    price_scope: Optional[str] = None
+    price_kind: Optional[str] = None
+    candidate_alternatives: list[dict[str, Any]] = Field(default_factory=list)
     error: Optional[str] = None
     message: Optional[str] = None
     duration_seconds: Optional[float] = None
@@ -121,6 +129,19 @@ class PriceLatestResponse(SQLModel):
     card_id: int
     owned_card_id: Optional[int] = None
     latest: Optional[PriceHistoryRead] = None
+    latest_any: Optional[PriceHistoryRead] = None
+    latest_market: Optional[PriceHistoryRead] = None
+    latest_manual_owned: Optional[PriceHistoryRead] = None
+    error: Optional[str] = None
+    message: Optional[str] = None
+
+
+class PriceMarketLatestResponse(SQLModel):
+    ok: bool
+    card_id: int
+    owned_card_id: Optional[int] = None
+    latest_market: Optional[PriceHistoryRead] = None
+    latest_manual_owned: Optional[PriceHistoryRead] = None
     error: Optional[str] = None
     message: Optional[str] = None
 
@@ -147,7 +168,7 @@ class PriceProviderStatusRead(SQLModel):
     enabled: bool
     configured: bool
     source: str
-    missing: list[str] = []
+    missing: list[str] = Field(default_factory=list)
     masked_api_key: Optional[str] = None
     secret_encrypted: bool = False
     plan: Optional[str] = None
@@ -163,7 +184,7 @@ class PriceProviderStatusRead(SQLModel):
     fetch_history: Optional[bool] = None
     history_period: Optional[str] = None
     respect_retry_after: Optional[bool] = None
-    expected_sources: list[str] = []
+    expected_sources: list[str] = Field(default_factory=list)
     path_info: Optional[str] = None
 
 
@@ -212,6 +233,29 @@ class PriceProviderTestResponse(SQLModel):
     message: Optional[str] = None
 
 
+class PriceProviderMappingCreate(SQLModel):
+    card_id: int
+    provider: str
+    source_card_id: str
+    source_url: Optional[str] = None
+    confidence: Optional[str] = "manual"
+    match_score: Optional[float] = None
+    notes: Optional[str] = None
+
+
+class PriceProviderMappingRead(SQLModel):
+    id: int
+    card_id: int
+    provider: str
+    source_card_id: str
+    source_url: Optional[str] = None
+    confidence: Optional[str] = None
+    match_score: Optional[float] = None
+    notes: Optional[str] = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class CollectionValuationRead(SQLModel):
     ok: bool
     currency: str
@@ -221,9 +265,42 @@ class CollectionValuationRead(SQLModel):
     owned_cards_count: int
     unique_cards_count: int
     missing_price_cards: int
+    missing_fx_cards: int = 0
+    fx_warnings: list[str] = Field(default_factory=list)
+    fx_provider: Optional[str] = None
+    latest_fx_refresh_at: Optional[datetime] = None
     price_change_24h_huf: Optional[float] = None
     price_change_7d_huf: Optional[float] = None
     latest_refresh_at: Optional[datetime] = None
+
+
+class FxRateRead(SQLModel):
+    base_currency: str
+    target_currency: str
+    rate: Optional[float] = None
+    rate_date: Optional[date] = None
+    source: Optional[str] = None
+    provider: Optional[str] = None
+    fetched_at: Optional[datetime] = None
+    expires_at: Optional[datetime] = None
+    warning: Optional[str] = None
+    error: Optional[str] = None
+    message: Optional[str] = None
+
+
+class FxRatesResponse(SQLModel):
+    ok: bool
+    enabled: bool
+    provider: str
+    target_currency: str
+    cache_ttl_hours: int
+    rates: list[FxRateRead]
+
+
+class FxRefreshRequest(SQLModel):
+    currencies: list[str] = Field(default_factory=lambda: ["USD", "EUR"])
+    target_currency: str = "HUF"
+    force: bool = True
 
 
 class CollectionSummaryRead(SQLModel):

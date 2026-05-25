@@ -14,6 +14,8 @@ import type {
   CollectionSummary,
   CollectionValuation,
   DemoSeedResponse,
+  FxRatesResponse,
+  FxRefreshRequest,
   LocalAIStatus,
   MediaUploadResponse,
   LocalAIAnalysisResponse,
@@ -31,7 +33,10 @@ import type {
   PriceHistoryEntry,
   PriceHistoryResponse,
   PriceLatestResponse,
+  PriceMarketLatestResponse,
   PriceObservation,
+  PriceProviderMapping,
+  PriceProviderMappingCreate,
   PriceProviderSettingResponse,
   PriceProviderSettingsResponse,
   PriceProviderSettingsUpdate,
@@ -99,6 +104,12 @@ export const api = {
   getCollectionValuation: () => request<CollectionValuation>("/api/collection/valuation"),
   getCollectionSnapshots: () => request<CollectionSnapshot[]>("/api/collection/snapshots"),
   createCollectionSnapshot: () => request<CollectionSnapshot>("/api/collection/snapshot", { method: "POST" }),
+  getFxRates: () => request<FxRatesResponse>("/api/fx/rates"),
+  refreshFxRates: (body: FxRefreshRequest = { currencies: ["USD", "EUR"], target_currency: "HUF", force: true }) =>
+    request<FxRatesResponse>("/api/fx/refresh", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   getOwnedCards: () => request<OwnedCard[]>("/api/owned-cards"),
   getOwnedCard: (id: number) => request<OwnedCard>(`/api/owned-cards/${id}`),
   createOwnedCard: (body: Partial<OwnedCard>) =>
@@ -143,6 +154,8 @@ export const api = {
     request<PriceObservation | null>(`/api/owned-cards/${id}/latest-price`, undefined, { notFoundAsNull: true }),
   getLatestOwnedCardPriceHistory: (id: number) =>
     request<PriceLatestResponse>(`/api/owned-cards/${id}/prices/latest`),
+  getOwnedCardMarketLatest: (id: number) =>
+    request<PriceMarketLatestResponse>(`/api/owned-cards/${id}/prices/market-latest`),
   getLatestCardPriceHistory: (cardId: number) =>
     request<PriceLatestResponse>(`/api/prices/latest/${cardId}`),
   getPriceHistory: (cardId: number) =>
@@ -160,6 +173,11 @@ export const api = {
   refreshOwnedPrices: () => request<PriceRefreshResponse>("/api/prices/refresh-owned", { method: "POST" }),
   refreshAllPrices: () => request<PriceRefreshResponse>("/api/prices/refresh-all", { method: "POST" }),
   getPriceProviderStatus: () => request<PriceProvidersStatusResponse>("/api/prices/providers/status"),
+  savePriceProviderMapping: (body: PriceProviderMappingCreate) =>
+    request<PriceProviderMapping>("/api/prices/provider-mappings", {
+      method: "POST",
+      body: JSON.stringify(body),
+    }),
   getPriceProviderSettings: () => request<PriceProviderSettingsResponse>("/api/settings/price-providers"),
   updatePriceProviderSetting: (provider: string, body: PriceProviderSettingsUpdate) =>
     request<PriceProviderSettingResponse>(`/api/settings/price-providers/${provider}`, {

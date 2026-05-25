@@ -3,9 +3,11 @@ from datetime import datetime, timedelta
 
 from sqlmodel import Session, select
 
+from ..config import FX_PROVIDER
 from ..models import OwnedCard, PriceHistory, PriceObservation
 from ..schemas import CollectionValuationRead
-from .price_repository import latest_successful_price, value_as_huf
+from .fx_service import latest_fx_refresh_at
+from .price_repository import latest_manual_price, latest_market_price, value_as_huf
 
 
 def calculate_collection_valuation(session: Session) -> CollectionValuationRead:
@@ -22,6 +24,10 @@ def calculate_collection_valuation(session: Session) -> CollectionValuationRead:
         owned_cards_count=current["owned_cards_count"],
         unique_cards_count=current["unique_cards_count"],
         missing_price_cards=current["missing_price_cards"],
+        missing_fx_cards=current["missing_fx_cards"],
+        fx_warnings=fx_warnings(int(current["missing_fx_cards"])),
+        fx_provider=FX_PROVIDER,
+        latest_fx_refresh_at=latest_fx_refresh_at(session),
         price_change_24h_huf=change_from_previous(current, previous_24h),
         price_change_7d_huf=change_from_previous(current, previous_7d),
         latest_refresh_at=latest_refresh_at(session),
@@ -34,10 +40,14 @@ def calculate_value_at(session: Session, at_or_before: datetime | None) -> dict[
     raw_value_huf = 0.0
     graded_value_huf = 0.0
     missing_price_cards = 0
+    missing_fx_cards = 0
     priced_cards = 0
 
     for owned_card in owned_cards:
-        value = value_for_owned_card(session, owned_card, at_or_before)
+        value, missing_fx = value_for_owned_card_result(session, owned_card, at_or_before)
+        if missing_fx:
+            missing_fx_cards += 1
+            continue
         if value is None:
             missing_price_cards += 1
             continue
@@ -55,6 +65,7 @@ def calculate_value_at(session: Session, at_or_before: datetime | None) -> dict[
         "owned_cards_count": len(owned_cards),
         "unique_cards_count": len({owned_card.card_id for owned_card in owned_cards}),
         "missing_price_cards": missing_price_cards,
+        "missing_fx_cards": missing_fx_cards,
         "priced_cards": priced_cards,
     }
 
@@ -64,15 +75,40 @@ def value_for_owned_card(
     owned_card: OwnedCard,
     at_or_before: datetime | None = None,
 ) -> float | None:
-    history = latest_successful_price(session, owned_card.card_id, owned_card.id, at_or_before)
-    if history is not None:
-        return value_from_history(owned_card, history)
+    value, _missing_fx = value_for_owned_card_result(session, owned_card, at_or_before)
+    return value
+
+
+def value_for_owned_card_result(
+    session: Session,
+    owned_card: OwnedCard,
+    at_or_before: datetime | None = None,
+) -> tuple[float | None, bool]:
+    market_history = latest_market_price(session, owned_card.card_id, owned_card.id, at_or_before)
+    if market_history is not None:
+        value = value_from_history(owned_card, market_history)
+        if value is not None:
+            return value, False
+        if has_source_price(market_history) and market_history.currency != "HUF":
+            return None, True
+        return None, False
+
+    manual_history = latest_manual_price(session, owned_card.card_id, owned_card.id, at_or_before)
+    if manual_history is None:
+        manual_history = latest_manual_price(session, owned_card.card_id, None, at_or_before)
+    if manual_history is not None:
+        value = value_from_history(owned_card, manual_history)
+        if value is not None:
+            return value, False
+        if has_source_price(manual_history) and manual_history.currency != "HUF":
+            return None, True
+        return None, False
 
     legacy = latest_legacy_price(session, owned_card.card_id, at_or_before)
     if legacy is not None:
-        return value_from_legacy(owned_card, legacy)
+        return value_from_legacy(owned_card, legacy), False
 
-    return None
+    return None, False
 
 
 def value_from_history(owned_card: OwnedCard, history: PriceHistory) -> float | None:
@@ -88,6 +124,28 @@ def value_from_history(owned_card: OwnedCard, history: PriceHistory) -> float | 
                 return graded_value
 
     return raw_value
+
+
+def has_source_price(history: PriceHistory) -> bool:
+    return any(
+        value is not None
+        for value in (
+            history.raw_price,
+            history.market_price,
+            history.low_price,
+            history.high_price,
+            history.psa_7,
+            history.psa_8,
+            history.psa_9,
+            history.psa_10,
+        )
+    )
+
+
+def fx_warnings(missing_fx_cards: int) -> list[str]:
+    if missing_fx_cards <= 0:
+        return []
+    return [f"{missing_fx_cards} cards have non-HUF prices but no HUF conversion."]
 
 
 def value_from_legacy(owned_card: OwnedCard, observation: PriceObservation) -> float | None:

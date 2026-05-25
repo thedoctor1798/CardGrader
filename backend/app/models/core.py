@@ -1,6 +1,8 @@
 from datetime import date, datetime
 from typing import Optional
 
+from pydantic import PrivateAttr
+from sqlalchemy import Index
 from sqlmodel import Field, SQLModel
 
 
@@ -78,6 +80,8 @@ class PriceObservation(SQLModel, table=True):
 
 class PriceHistory(SQLModel, table=True):
     __tablename__ = "price_history"
+    _price_scope: Optional[str] = PrivateAttr(default=None)
+    _price_kind: Optional[str] = PrivateAttr(default=None)
 
     id: Optional[int] = Field(default=None, primary_key=True)
     card_id: int = Field(foreign_key="cards.id", index=True)
@@ -111,6 +115,22 @@ class PriceHistory(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
+    @property
+    def price_scope(self) -> Optional[str]:
+        return self._price_scope
+
+    @price_scope.setter
+    def price_scope(self, value: Optional[str]) -> None:
+        self._price_scope = value
+
+    @property
+    def price_kind(self) -> Optional[str]:
+        return self._price_kind
+
+    @price_kind.setter
+    def price_kind(self, value: Optional[str]) -> None:
+        self._price_kind = value
+
 
 class PriceProviderSetting(SQLModel, table=True):
     __tablename__ = "price_provider_settings"
@@ -121,6 +141,55 @@ class PriceProviderSetting(SQLModel, table=True):
     config_json: Optional[str] = None
     secret_json: Optional[str] = None
     secret_encrypted: bool = Field(default=False)
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class PriceProviderCardMapping(SQLModel, table=True):
+    __tablename__ = "price_provider_card_mappings"
+    __table_args__ = (
+        Index(
+            "ix_price_provider_card_mapping_provider_card",
+            "provider",
+            "card_id",
+            unique=True,
+        ),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    provider: str = Field(index=True)
+    card_id: int = Field(foreign_key="cards.id", index=True)
+    source_card_id: str
+    source_url: Optional[str] = None
+    confidence: Optional[str] = None
+    match_score: Optional[float] = None
+    notes: Optional[str] = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
+class FxRate(SQLModel, table=True):
+    __tablename__ = "fx_rates"
+    __table_args__ = (
+        Index(
+            "ix_fx_rates_provider_base_target_date",
+            "provider",
+            "base_currency",
+            "target_currency",
+            "rate_date",
+            unique=True,
+        ),
+    )
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    provider: str = Field(index=True)
+    base_currency: str = Field(index=True)
+    target_currency: str = Field(index=True)
+    rate: float
+    rate_date: date = Field(index=True)
+    fetched_at: datetime = Field(default_factory=utc_now, index=True)
+    expires_at: datetime = Field(index=True)
+    raw_response_json: Optional[str] = None
     created_at: datetime = Field(default_factory=utc_now)
     updated_at: datetime = Field(default_factory=utc_now)
 
