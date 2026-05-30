@@ -58,6 +58,17 @@ POST /api/ai/vision-json
 
 The backend uses this for Phase A and Phase B prompts. It accepts a prompt, base64 image payloads, and an optional `max_tokens` value, then returns parsed JSON from LM Studio. If `max_tokens` is higher than `AI_WORKER_MAX_TOKENS`, the worker logs a warning and uses the configured worker limit.
 
+Model selection can be automatic. `LM_STUDIO_MODEL` is preferred, `AI_MODEL_NAME` is the fallback, and an empty or `auto` value makes the worker choose from `/v1/models` in this order: `qwen/qwen3-vl-30b`, `qwen/qwen3-vl-8b`, `qwen/qwen2.5-vl-7b`, any model containing `vl`, any model containing `vision`, then the first returned model. Streaming is disabled by default unless `AI_WORKER_STREAMING_ENABLED=true` or a request explicitly enables it.
+
+Useful worker controls:
+
+```env
+AI_MODEL_NAME=
+AI_WORKER_CONNECT_TIMEOUT_SECONDS=30
+AI_WORKER_TIMEOUT_SECONDS=300
+AI_WORKER_STREAMING_ENABLED=false
+```
+
 ## Security
 
 - Run this only on trusted private networks or Tailscale.
@@ -71,6 +82,7 @@ The backend uses this for Phase A and Phase B prompts. It accepts a prompt, base
 - `lm_studio_reachable=false`: start LM Studio server or check `LM_STUDIO_BASE_URL`.
 - Worker unreachable from Linux: check Tailscale, Windows Firewall, and the worker host/port.
 - Invalid JSON: use a stronger vision model, disable thinking, or lower image count.
+- Broken pipe: check the worker log for selected model, endpoint, payload bytes, and image count. Prefer leaving `LM_STUDIO_MODEL` empty or set to `auto` if LM Studio has a loaded vision model in `/v1/models`.
 - Phase 16 says worker is too old: update this `ai-worker` folder and restart it so `/api/ai/vision-json` is available.
 - Recognition found nothing: upload a full, sharp front image where the name and collector number are visible.
 - Image errors: increase `AI_WORKER_MAX_IMAGE_SIZE_MB` or send fewer/smaller crops.

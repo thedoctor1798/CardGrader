@@ -38,15 +38,22 @@ def int_env(name: str, default: int) -> int:
 
 
 LM_STUDIO_BASE_URL = os.getenv("LM_STUDIO_BASE_URL", "http://127.0.0.1:1234/v1").rstrip("/")
-LM_STUDIO_MODEL = os.getenv("LM_STUDIO_MODEL", "").strip()
+LM_STUDIO_MODEL = (os.getenv("LM_STUDIO_MODEL") or os.getenv("AI_MODEL_NAME") or "").strip()
 AI_WORKER_HOST = os.getenv("AI_WORKER_HOST", "0.0.0.0")
 AI_WORKER_PORT = int_env("AI_WORKER_PORT", 8765)
+AI_WORKER_CONNECT_TIMEOUT_SECONDS = int_env("AI_WORKER_CONNECT_TIMEOUT_SECONDS", 30)
 AI_WORKER_TIMEOUT_SECONDS = int_env("AI_WORKER_TIMEOUT_SECONDS", 300)
 AI_WORKER_MAX_IMAGES = max(1, min(16, int_env("AI_WORKER_MAX_IMAGES", 8)))
 AI_WORKER_MAX_IMAGE_SIZE_MB = max(1, int_env("AI_WORKER_MAX_IMAGE_SIZE_MB", 8))
 AI_WORKER_DISABLE_THINKING = bool_env("AI_WORKER_DISABLE_THINKING", True)
 AI_WORKER_SHARED_TOKEN = os.getenv("AI_WORKER_SHARED_TOKEN", "").strip()
 AI_WORKER_MAX_TOKENS = int_env("AI_WORKER_MAX_TOKENS", 4096)
+AI_WORKER_STREAMING_ENABLED = bool_env("AI_WORKER_STREAMING_ENABLED", False)
+VISION_MODEL_PREFERENCES = [
+    "qwen/qwen3-vl-30b",
+    "qwen/qwen3-vl-8b",
+    "qwen/qwen2.5-vl-7b",
+]
 
 
 class WorkerImage(BaseModel):
@@ -78,6 +85,8 @@ class GradeRequest(BaseModel):
     analysis_scope: str | None = None
     prompt_rules: list[str] = Field(default_factory=list)
     grading_profile: str = "pokemon_tcg_default"
+    model_name: str | None = None
+    stream: bool | None = None
 
 
 class VisionJsonRequest(BaseModel):
@@ -86,6 +95,8 @@ class VisionJsonRequest(BaseModel):
     max_tokens: int | None = None
     response_format: str | None = "json_object"
     phase: str | None = None
+    model_name: str | None = None
+    stream: bool | None = None
 
 
 class RecognizeCardRequest(BaseModel):
@@ -107,6 +118,7 @@ def http_json(method: str, url: str, body: dict[str, Any] | None = None, timeout
     headers = {"Content-Type": "application/json"}
     if body is not None:
         data = json.dumps(body).encode("utf-8")
+        logger.info("HTTP %s %s payload_bytes=%s", method, url, len(data))
     request = urllib.request.Request(url, data=data, method=method, headers=headers)
     with urllib.request.urlopen(request, timeout=timeout_seconds or AI_WORKER_TIMEOUT_SECONDS) as response:
         return json.loads(response.read().decode("utf-8"))
@@ -127,15 +139,38 @@ def models_from_response(response: dict[str, Any]) -> list[str]:
 
 
 def lm_studio_models() -> list[str]:
-    response = http_json("GET", f"{LM_STUDIO_BASE_URL}/models", timeout_seconds=5)
+    response = http_json("GET", f"{LM_STUDIO_BASE_URL}/models", timeout_seconds=AI_WORKER_CONNECT_TIMEOUT_SECONDS)
     return models_from_response(response)
 
 
-def selected_model() -> str:
+def select_preferred_vision_model(models: list[str]) -> str:
+    if not models:
+        return ""
+    normalized = [(model, model.lower()) for model in models]
+    for preference in VISION_MODEL_PREFERENCES:
+        for model, lowered in normalized:
+            if preference in lowered:
+                return model
+    for model, lowered in normalized:
+        if "vl" in lowered:
+            return model
+    for model, lowered in normalized:
+        if "vision" in lowered:
+            return model
+    return models[0]
+
+
+def selected_model(requested_model: str | None = None) -> str:
+    requested = (requested_model or "").strip()
+    if requested and requested.lower() != "auto":
+        return requested
     if LM_STUDIO_MODEL and LM_STUDIO_MODEL.lower() != "auto":
         return LM_STUDIO_MODEL
-    models = lm_studio_models()
-    return models[0] if models else ""
+    return select_preferred_vision_model(lm_studio_models())
+
+
+def payload_size_bytes(payload: dict[str, Any]) -> int:
+    return len(json.dumps(payload).encode("utf-8"))
 
 
 def strip_markdown_fences(text: str) -> str:
@@ -367,6 +402,7 @@ def lm_studio_payload(request: GradeRequest, model: str) -> dict[str, Any]:
         "messages": [{"role": "user", "content": content}],
         "temperature": 0,
         "max_tokens": AI_WORKER_MAX_TOKENS,
+        "stream": bool(request.stream) if request.stream is not None else AI_WORKER_STREAMING_ENABLED,
     }
 
 
@@ -384,6 +420,7 @@ def lm_studio_recognition_payload(request: RecognizeCardRequest, model: str) -> 
         "messages": [{"role": "user", "content": content}],
         "temperature": 0,
         "max_tokens": AI_WORKER_MAX_TOKENS,
+        "stream": AI_WORKER_STREAMING_ENABLED,
     }
 
 
@@ -410,6 +447,7 @@ def lm_studio_vision_json_payload(request: VisionJsonRequest, model: str) -> dic
         "messages": [{"role": "user", "content": content}],
         "temperature": 0,
         "max_tokens": max_tokens,
+        "stream": bool(request.stream) if request.stream is not None else AI_WORKER_STREAMING_ENABLED,
     }
     if request.response_format == "json_object":
         payload["response_format"] = {"type": "json_object"}
@@ -453,7 +491,7 @@ def grade_card(request: GradeRequest, _: None = Depends(require_token)) -> JSONR
     image_debug = received_image_debug(request.images)
 
     try:
-        model = selected_model()
+        model = selected_model(request.model_name)
         if not model:
             return JSONResponse({"ok": False, "error": "model_not_found", "message": "No LM Studio model is loaded."})
     except Exception as exc:
@@ -468,7 +506,10 @@ def grade_card(request: GradeRequest, _: None = Depends(require_token)) -> JSONR
 
     try:
         lm_payload = lm_studio_payload(request, model)
-        response = http_json("POST", f"{LM_STUDIO_BASE_URL}/chat/completions", lm_payload)
+        endpoint = f"{LM_STUDIO_BASE_URL}/chat/completions"
+        size = payload_size_bytes(lm_payload)
+        logger.info("Final selected model before AI request: %s endpoint=%s images=%s payload_bytes=%s", model, endpoint, len(request.images), size)
+        response = http_json("POST", endpoint, lm_payload, timeout_seconds=AI_WORKER_TIMEOUT_SECONDS)
         duration = round(time.perf_counter() - started, 2)
         raw_content = response_content(response)
         try:
@@ -506,13 +547,17 @@ def grade_card(request: GradeRequest, _: None = Depends(require_token)) -> JSONR
                 **image_debug,
             }
         )
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+    except (BrokenPipeError, urllib.error.URLError, TimeoutError, OSError) as exc:
         logger.warning("LM Studio call failed: %s", exc)
         return JSONResponse(
             {
                 "ok": False,
                 "error": "lm_studio_unreachable",
-                "message": "LM Studio is not reachable or timed out.",
+                "message": f"LM Studio request failed: {exc}",
+                "selected_model": model if "model" in locals() else "",
+                "endpoint": f"{LM_STUDIO_BASE_URL}/chat/completions",
+                "payload_size_bytes": size if "size" in locals() else None,
+                "images_sent": len(request.images),
                 **image_debug,
             }
         )
@@ -530,7 +575,7 @@ def vision_json(request: VisionJsonRequest, _: None = Depends(require_token)) ->
     image_debug = received_image_debug(request.images)
 
     try:
-        model = selected_model()
+        model = selected_model(request.model_name)
         if not model:
             return JSONResponse({"ok": False, "error": "model_not_found", "message": "No LM Studio model is loaded.", **image_debug})
     except Exception as exc:
@@ -546,7 +591,10 @@ def vision_json(request: VisionJsonRequest, _: None = Depends(require_token)) ->
 
     try:
         lm_payload = lm_studio_vision_json_payload(request, model)
-        response = http_json("POST", f"{LM_STUDIO_BASE_URL}/chat/completions", lm_payload)
+        endpoint = f"{LM_STUDIO_BASE_URL}/chat/completions"
+        size = payload_size_bytes(lm_payload)
+        logger.info("Final selected model before AI request: %s endpoint=%s phase=%s images=%s payload_bytes=%s", model, endpoint, request.phase, len(request.images), size)
+        response = http_json("POST", endpoint, lm_payload, timeout_seconds=AI_WORKER_TIMEOUT_SECONDS)
         duration = round(time.perf_counter() - started, 2)
         raw_content = response_content(response)
         try:
@@ -584,13 +632,17 @@ def vision_json(request: VisionJsonRequest, _: None = Depends(require_token)) ->
                 **image_debug,
             }
         )
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+    except (BrokenPipeError, urllib.error.URLError, TimeoutError, OSError) as exc:
         logger.warning("LM Studio vision JSON call failed: %s", exc)
         return JSONResponse(
             {
                 "ok": False,
                 "error": "lm_studio_unreachable",
-                "message": "LM Studio is not reachable or timed out.",
+                "message": f"LM Studio request failed: {exc}",
+                "selected_model": model if "model" in locals() else "",
+                "endpoint": f"{LM_STUDIO_BASE_URL}/chat/completions",
+                "payload_size_bytes": size if "size" in locals() else None,
+                "images_sent": len(request.images),
                 **image_debug,
             }
         )
@@ -622,7 +674,10 @@ def recognize_card(request: RecognizeCardRequest, _: None = Depends(require_toke
 
     try:
         lm_payload = lm_studio_recognition_payload(request, model)
-        response = http_json("POST", f"{LM_STUDIO_BASE_URL}/chat/completions", lm_payload)
+        endpoint = f"{LM_STUDIO_BASE_URL}/chat/completions"
+        size = payload_size_bytes(lm_payload)
+        logger.info("Final selected model before AI request: %s endpoint=%s images=%s payload_bytes=%s", model, endpoint, len(request.images), size)
+        response = http_json("POST", endpoint, lm_payload, timeout_seconds=AI_WORKER_TIMEOUT_SECONDS)
         duration = round(time.perf_counter() - started, 2)
         raw_content = response_content(response)
         try:
@@ -678,13 +733,17 @@ def recognize_card(request: RecognizeCardRequest, _: None = Depends(require_toke
                 "raw_response_preview": body[:1000],
             }
         )
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+    except (BrokenPipeError, urllib.error.URLError, TimeoutError, OSError) as exc:
         logger.warning("LM Studio recognition call failed: %s", exc)
         return JSONResponse(
             {
                 "ok": False,
                 "error": "local_model_unavailable",
-                "message": "The AI worker is running, but LM Studio is not reachable.",
+                "message": f"LM Studio request failed: {exc}",
+                "selected_model": model if "model" in locals() else "",
+                "endpoint": f"{LM_STUDIO_BASE_URL}/chat/completions",
+                "payload_size_bytes": size if "size" in locals() else None,
+                "images_sent": len(request.images),
             }
         )
 

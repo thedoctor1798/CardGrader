@@ -1019,10 +1019,21 @@ Centering is calculated from `perspective_corrected.jpg` first. OpenCV finds lik
 
 The card detail page includes one `Start AI Grading` button. Internally:
 
-1. Phase A receives original color images, normalized originals, deterministic centering JSON, final boundary data, and card metadata. It returns internal working notes only.
-2. Phase B receives Phase A notes, deterministic centering JSON, original images, and diagnostic views when `SEND_DIAGNOSTIC_IMAGES_TO_AI=true`. It returns the final user-facing JSON grade estimate.
+1. Phase A receives only the original front image, original back image when present, deterministic centering JSON, final boundary data, and card metadata. Images are resized before sending to the AI provider with a 1400 px maximum long side at JPEG quality 85. It returns internal working notes only.
+2. Phase B receives Phase A notes, deterministic centering JSON, the original front image as reference, and a small diagnostic set: front emboss, high-pass, and Sobel views. Back diagnostic variants are included only when back images exist and diagnostics are enabled. Phase B images are resized to a 1200 px maximum long side at JPEG quality 85. It returns the final user-facing JSON grade estimate.
 
 Phase B can be retried without rerunning Phase A. Developer details in the panel expose Phase A notes, model parameters, warnings, and raw stored JSON.
+
+Model selection is allowed to be automatic. `LOCAL_AI_MODEL_NAME` is preferred, `AI_MODEL_NAME` is the fallback, and an empty or `auto` value makes CardGrader choose a loaded vision model from `/v1/models` in this order: `qwen/qwen3-vl-30b`, `qwen/qwen3-vl-8b`, `qwen/qwen2.5-vl-7b`, any model containing `vl`, any model containing `vision`, then the first returned model. The backend logs the selected model, AI endpoint, image count, and payload size before each request.
+
+Useful provider controls:
+
+```env
+AI_MODEL_NAME=
+LOCAL_AI_CONNECT_TIMEOUT_SECONDS=30
+LOCAL_AI_READ_TIMEOUT_SECONDS=300
+LOCAL_AI_STREAMING_ENABLED=false
+```
 
 The Windows AI worker now also exposes:
 
@@ -1039,3 +1050,4 @@ Use the updated worker for Phase 16 remote-worker grading. The older `/api/ai/gr
 - Reflective holo cards: diagnostic images can exaggerate reflections. Confirm severe findings against the original color image.
 - Processed images exaggerate defects: emboss, high-pass, and Sobel are discovery aids, not proof. Phase B is prompted to confirm important defects when possible.
 - Token/context limits: lower `AI_PHASE_A_MAX_OUTPUT_TOKENS` or `AI_PHASE_B_MAX_OUTPUT_TOKENS`, or raise your local worker/server max token config if the model truncates JSON.
+- Broken pipe from LM Studio/worker: check the logged selected model, endpoint, payload bytes, and image count. Leave `LOCAL_AI_MODEL_NAME` empty or set it to `auto` to let CardGrader select a vision model from `/v1/models`.

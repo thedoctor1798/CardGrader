@@ -1,12 +1,15 @@
+import base64
+import hashlib
+from io import BytesIO
 import json
 import logging
-import mimetypes
 import urllib.error
 from datetime import datetime
 from pathlib import Path
 from typing import Any
 
 from fastapi import HTTPException
+from PIL import Image, ImageOps, UnidentifiedImageError
 from sqlmodel import Session, select
 from sqlalchemy import or_
 
@@ -18,11 +21,14 @@ from ..config import (
     ENABLE_IMAGE_PREPROCESSING,
     ENABLE_TWO_PHASE_AI_GRADING,
     LOCAL_AI_BASE_URL,
+    LOCAL_AI_CONNECT_TIMEOUT_SECONDS,
     LOCAL_AI_DISABLE_THINKING,
     LOCAL_AI_MAX_TOKENS,
     LOCAL_AI_MODE,
     LOCAL_AI_MODEL_NAME,
     LOCAL_AI_PROVIDER,
+    LOCAL_AI_READ_TIMEOUT_SECONDS,
+    LOCAL_AI_STREAMING_ENABLED,
     LOCAL_AI_TIMEOUT_SECONDS,
     LOCAL_AI_WORKER_BASE_URL,
     SEND_DIAGNOSTIC_IMAGES_TO_AI,
@@ -34,14 +40,15 @@ from .local_ai import (
     LOCAL_AI_TEMPERATURE,
     LocalAIHTTPError,
     content_from_chat_response,
-    data_url_for_asset,
     extract_first_json_object,
     http_json,
     image_payload_metadata,
+    local_path,
+    models_from_response,
     remote_worker_headers,
-    remote_worker_image_payload,
     require_local_ai_enabled,
     save_text_asset,
+    select_preferred_vision_model,
     score_value,
 )
 
@@ -50,6 +57,9 @@ logger = logging.getLogger(__name__)
 PIPELINE_VERSION = "phase16_two_phase_v1"
 PHASE_A_PROMPT_VERSION = "phase16_phase_a_v1"
 PHASE_B_PROMPT_VERSION = "phase16_phase_b_v1"
+PHASE_A_MAX_LONG_SIDE = 1400
+PHASE_B_MAX_LONG_SIDE = 1200
+AI_JPEG_QUALITY = 85
 
 
 def json_dumps(data: Any) -> str:
@@ -63,6 +73,88 @@ def json_loads(value: str | None, fallback: Any) -> Any:
         return json.loads(value)
     except json.JSONDecodeError:
         return fallback
+
+
+def payload_size_bytes(payload: dict[str, Any]) -> int:
+    return len(json.dumps(payload).encode("utf-8"))
+
+
+def phase_max_long_side(phase: str) -> int:
+    return PHASE_A_MAX_LONG_SIDE if "Phase A" in phase else PHASE_B_MAX_LONG_SIDE
+
+
+def encode_asset_for_ai(asset: AnalysisAsset, max_long_side: int) -> dict[str, Any]:
+    path = local_path(asset.file_path)
+    try:
+        with Image.open(path) as image:
+            image = ImageOps.exif_transpose(image).convert("RGB")
+            image.thumbnail((max_long_side, max_long_side), Image.Resampling.LANCZOS)
+            buffer = BytesIO()
+            image.save(buffer, format="JPEG", quality=AI_JPEG_QUALITY, optimize=True)
+            image_bytes = buffer.getvalue()
+            width, height = image.size
+    except (OSError, UnidentifiedImageError) as exc:
+        raise ValueError(f"Could not prepare AI image payload for {asset.label or asset.file_path}: {exc}") from exc
+    sha256 = hashlib.sha256(image_bytes).hexdigest()
+    return {
+        "label": asset.label or path.name,
+        "mime_type": "image/jpeg",
+        "base64": base64.b64encode(image_bytes).decode("ascii"),
+        "asset_id": asset.id,
+        "relative_path": str(asset.file_path),
+        "filename": path.name,
+        "width": width,
+        "height": height,
+        "file_size": len(image_bytes),
+        "sha256": sha256,
+        "image_hash_short": sha256[:12],
+    }
+
+
+def image_url_for_ai(asset: AnalysisAsset, max_long_side: int) -> dict[str, Any]:
+    payload = encode_asset_for_ai(asset, max_long_side)
+    return {
+        "type": "image_url",
+        "image_url": {"url": f"data:{payload['mime_type']};base64,{payload['base64']}"},
+    }
+
+
+def resolve_server_local_model() -> str:
+    if LOCAL_AI_MODEL_NAME and LOCAL_AI_MODEL_NAME.lower() != "auto":
+        return LOCAL_AI_MODEL_NAME
+    response = http_json("GET", f"{LOCAL_AI_BASE_URL.rstrip('/')}/models", timeout_seconds=LOCAL_AI_CONNECT_TIMEOUT_SECONDS)
+    model_name = select_preferred_vision_model(models_from_response(response))
+    if not model_name:
+        raise HTTPException(status_code=400, detail="No local vision model is loaded or configured.")
+    return model_name
+
+
+def remote_worker_status() -> dict[str, Any]:
+    if not LOCAL_AI_WORKER_BASE_URL.strip():
+        raise HTTPException(status_code=400, detail="LOCAL_AI_WORKER_BASE_URL is not configured.")
+    base = LOCAL_AI_WORKER_BASE_URL.rstrip("/")
+    last_error: Exception | None = None
+    for path in ("/health", "/api/health", "/api/local-ai/status"):
+        try:
+            return http_json("GET", f"{base}{path}", timeout_seconds=LOCAL_AI_CONNECT_TIMEOUT_SECONDS, headers=remote_worker_headers())
+        except Exception as exc:
+            last_error = exc
+            continue
+    raise HTTPException(status_code=502, detail=f"Remote Local AI worker is not reachable: {last_error}")
+
+
+def resolve_remote_worker_model() -> str:
+    if LOCAL_AI_MODEL_NAME and LOCAL_AI_MODEL_NAME.lower() != "auto":
+        return LOCAL_AI_MODEL_NAME
+    status = remote_worker_status()
+    model_name = str(status.get("model_name") or status.get("model") or "").strip()
+    if model_name:
+        return model_name
+    models = [str(item) for item in status.get("models", [])] if isinstance(status.get("models"), list) else []
+    model_name = select_preferred_vision_model(models)
+    if not model_name:
+        raise HTTPException(status_code=400, detail="No remote worker vision model is loaded or configured.")
+    return model_name
 
 
 def latest_pipeline_run(session: Session, owned_card_id: int) -> AIGradingPipelineRun | None:
@@ -138,8 +230,6 @@ def phase_a_assets(assets: dict[str, AnalysisAsset]) -> list[AnalysisAsset]:
     labels = [
         "front_original",
         "back_original",
-        "front_original_normalized",
-        "back_original_normalized",
     ]
     return [assets[label] for label in labels if label in assets]
 
@@ -150,23 +240,14 @@ def phase_b_assets(assets: dict[str, AnalysisAsset]) -> list[AnalysisAsset]:
     else:
         labels = [
             "front_emboss_surface",
-            "back_emboss_surface",
             "front_highpass_texture",
-            "back_highpass_texture",
             "front_sobel_edges",
-            "back_sobel_edges",
-            "front_canny_edges",
-            "back_canny_edges",
-            "front_centering_debug",
-            "back_centering_debug",
             "front_original",
-            "back_original",
         ]
+        if any(label in assets for label in ("back_original", "back_emboss_surface", "back_highpass_texture", "back_sobel_edges")):
+            labels.extend(["back_emboss_surface", "back_highpass_texture", "back_sobel_edges", "back_original"])
     selected = [assets[label] for label in labels if label in assets]
-    limit = 8 if LOCAL_AI_MODE == "remote_worker" else 10
-    if len(selected) > limit:
-        logger.warning("Phase B selected %s images but provider path supports %s safely; dropping extras.", len(selected), limit)
-    return selected[:limit]
+    return selected
 
 
 def preprocessing_context(preprocessing: dict[str, Any]) -> dict[str, Any]:
@@ -335,8 +416,7 @@ def wrap_prompt(prompt: str) -> str:
 
 
 def call_server_local_json(prompt: str, assets: list[AnalysisAsset], max_tokens: int, phase: str) -> tuple[dict[str, Any], str, bool]:
-    if not LOCAL_AI_MODEL_NAME:
-        raise HTTPException(status_code=400, detail="LOCAL_AI_MODEL_NAME is not configured.")
+    model_name = resolve_server_local_model()
     token_limit = safe_max_tokens(max_tokens, phase)
     if AI_MAX_CONTEXT_TOKENS:
         logger.warning(
@@ -345,15 +425,33 @@ def call_server_local_json(prompt: str, assets: list[AnalysisAsset], max_tokens:
             AI_MAX_CONTEXT_TOKENS,
         )
     content: list[dict[str, Any]] = [{"type": "text", "text": wrap_prompt(prompt)}]
-    content.extend(data_url_for_asset(asset) for asset in assets)
+    content.extend(image_url_for_ai(asset, phase_max_long_side(phase)) for asset in assets)
     payload = {
-        "model": LOCAL_AI_MODEL_NAME,
+        "model": model_name,
         "messages": [{"role": "user", "content": content}],
         "temperature": LOCAL_AI_TEMPERATURE,
         "max_tokens": token_limit,
         "response_format": LOCAL_AI_RESPONSE_FORMAT,
+        "stream": LOCAL_AI_STREAMING_ENABLED,
     }
-    response = http_json("POST", f"{LOCAL_AI_BASE_URL.rstrip('/')}/chat/completions", payload)
+    endpoint = f"{LOCAL_AI_BASE_URL.rstrip('/')}/chat/completions"
+    size = payload_size_bytes(payload)
+    logger.info("%s AI request model=%s endpoint=%s images=%s payload_bytes=%s", phase, model_name, endpoint, len(assets), size)
+    try:
+        response = http_json("POST", endpoint, payload, timeout_seconds=LOCAL_AI_READ_TIMEOUT_SECONDS)
+    except (BrokenPipeError, urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "ok": False,
+                "error": "ai_provider_connection_failed",
+                "message": f"{phase} AI provider request failed: {exc}",
+                "selected_model": model_name,
+                "endpoint": endpoint,
+                "payload_size_bytes": size,
+                "images_sent": len(assets),
+            },
+        ) from exc
     content_text, parsed_from_reasoning = content_from_chat_response(response)
     if not content_text.strip():
         raise ValueError(f"{phase} returned empty content.")
@@ -363,21 +461,27 @@ def call_server_local_json(prompt: str, assets: list[AnalysisAsset], max_tokens:
 def call_remote_worker_json(prompt: str, assets: list[AnalysisAsset], max_tokens: int, phase: str) -> tuple[dict[str, Any], str, bool]:
     if not LOCAL_AI_WORKER_BASE_URL.strip():
         raise HTTPException(status_code=400, detail="LOCAL_AI_WORKER_BASE_URL is not configured.")
+    model_name = resolve_remote_worker_model()
     token_limit = max_tokens
-    images = [remote_worker_image_payload(asset) for asset in assets]
+    images = [encode_asset_for_ai(asset, phase_max_long_side(phase)) for asset in assets]
     payload = {
         "prompt": wrap_prompt(prompt),
         "images": images,
         "max_tokens": token_limit,
         "response_format": "json_object",
         "phase": phase,
+        "model_name": model_name,
+        "stream": LOCAL_AI_STREAMING_ENABLED,
     }
+    endpoint = f"{LOCAL_AI_WORKER_BASE_URL.rstrip('/')}/api/ai/vision-json"
+    size = payload_size_bytes(payload)
+    logger.info("%s remote AI request model=%s endpoint=%s images=%s payload_bytes=%s", phase, model_name, endpoint, len(images), size)
     try:
         response = http_json(
             "POST",
-            f"{LOCAL_AI_WORKER_BASE_URL.rstrip('/')}/api/ai/vision-json",
+            endpoint,
             payload,
-            timeout_seconds=LOCAL_AI_TIMEOUT_SECONDS,
+            timeout_seconds=LOCAL_AI_READ_TIMEOUT_SECONDS or LOCAL_AI_TIMEOUT_SECONDS,
             headers=remote_worker_headers(),
         )
     except LocalAIHTTPError as exc:
@@ -387,8 +491,30 @@ def call_remote_worker_json(prompt: str, assets: list[AnalysisAsset], max_tokens
                 detail="Windows AI worker is too old for Phase 16. Update ai-worker to expose /api/ai/vision-json.",
             ) from exc
         raise
+    except (BrokenPipeError, urllib.error.URLError, TimeoutError, OSError) as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={
+                "ok": False,
+                "error": "ai_provider_connection_failed",
+                "message": f"{phase} remote AI worker request failed: {exc}",
+                "selected_model": model_name,
+                "endpoint": endpoint,
+                "payload_size_bytes": size,
+                "images_sent": len(images),
+            },
+        ) from exc
     if not response.get("ok"):
-        raise ValueError(str(response.get("message") or response.get("error") or "remote worker returned ok=false"))
+        raise HTTPException(
+            status_code=502,
+            detail={
+                **response,
+                "selected_model": response.get("selected_model") or response.get("model") or model_name,
+                "endpoint": response.get("endpoint") or endpoint,
+                "payload_size_bytes": response.get("payload_size_bytes") or size,
+                "images_sent": response.get("images_sent") or len(images),
+            },
+        )
     result = response.get("result")
     if not isinstance(result, dict):
         raise ValueError("remote worker response did not include a JSON object result")
@@ -408,26 +534,27 @@ def pipeline_model_parameters() -> dict[str, Any]:
     return {
         "provider": LOCAL_AI_PROVIDER if LOCAL_AI_MODE != "remote_worker" else "remote_worker",
         "mode": LOCAL_AI_MODE,
-        "model_name": LOCAL_AI_MODEL_NAME,
+        "model_name": LOCAL_AI_MODEL_NAME or "auto",
         "temperature": LOCAL_AI_TEMPERATURE,
         "phase_a_max_output_tokens": min(AI_PHASE_A_MAX_OUTPUT_TOKENS, LOCAL_AI_MAX_TOKENS),
         "phase_b_max_output_tokens": min(AI_PHASE_B_MAX_OUTPUT_TOKENS, LOCAL_AI_MAX_TOKENS),
         "requested_context_tokens": AI_MAX_CONTEXT_TOKENS,
         "send_diagnostic_images_to_ai": SEND_DIAGNOSTIC_IMAGES_TO_AI,
         "disable_thinking": LOCAL_AI_DISABLE_THINKING,
+        "stream": LOCAL_AI_STREAMING_ENABLED,
     }
 
 
-def create_pipeline_records(session: Session, owned_card: OwnedCard) -> tuple[AnalysisRun, AIGradingPipelineRun]:
+def create_pipeline_records(session: Session, owned_card: OwnedCard, selected_model_name: str) -> tuple[AnalysisRun, AIGradingPipelineRun]:
     analysis_run = AnalysisRun(
         owned_card_id=owned_card.id,
         mode="two_phase_ai_grade",
         status="running",
         model_provider="remote_worker" if LOCAL_AI_MODE == "remote_worker" else LOCAL_AI_PROVIDER,
-        model_name=LOCAL_AI_MODEL_NAME,
+        model_name=selected_model_name,
         prompt_version=f"{PHASE_A_PROMPT_VERSION}+{PHASE_B_PROMPT_VERSION}",
         analysis_version=PIPELINE_VERSION,
-        model_parameters_json=json.dumps(pipeline_model_parameters(), ensure_ascii=True),
+        model_parameters_json=json.dumps({**pipeline_model_parameters(), "model_name": selected_model_name}, ensure_ascii=True),
         analysis_scope="full",
     )
     session.add(analysis_run)
@@ -440,7 +567,7 @@ def create_pipeline_records(session: Session, owned_card: OwnedCard) -> tuple[An
         status="running",
         phase_a_status="pending",
         phase_b_status="pending",
-        model_parameters_json=json.dumps(pipeline_model_parameters(), ensure_ascii=True),
+        model_parameters_json=json.dumps({**pipeline_model_parameters(), "model_name": selected_model_name}, ensure_ascii=True),
     )
     session.add(pipeline)
     session.commit()
@@ -526,8 +653,10 @@ def run_two_phase_ai_grading(session: Session, owned_card_id: int) -> dict[str, 
         raise HTTPException(status_code=404, detail="Card not found")
 
     require_local_ai_enabled()
+    selected_model_name = resolve_remote_worker_model() if LOCAL_AI_MODE == "remote_worker" else resolve_server_local_model()
+    logger.info("Starting two-phase AI grading owned_card_id=%s selected_model=%s mode=%s", owned_card_id, selected_model_name, LOCAL_AI_MODE)
     preprocessing = preprocess_owned_card(session, owned_card_id) if ENABLE_IMAGE_PREPROCESSING else processed_payload(session, owned_card_id)
-    analysis_run, pipeline = create_pipeline_records(session, owned_card)
+    analysis_run, pipeline = create_pipeline_records(session, owned_card, selected_model_name)
     warnings: list[str] = []
     if not SEND_DIAGNOSTIC_IMAGES_TO_AI:
         warnings.append("diagnostic_images_disabled")
@@ -574,6 +703,23 @@ def run_two_phase_ai_grading(session: Session, owned_card_id: int) -> dict[str, 
             "warnings": warnings,
             "image_payload": image_payload_metadata(list(assets.values()), owned_card, card),
         }
+    except HTTPException as exc:
+        pipeline.status = "failed" if pipeline.phase_a_status != "completed" else "phase_b_failed"
+        if pipeline.phase_a_status != "completed":
+            pipeline.phase_a_status = "failed"
+            analysis_run.status = "failed"
+        else:
+            pipeline.phase_b_status = "failed"
+            analysis_run.status = "failed"
+        pipeline.error_message = json.dumps(exc.detail, ensure_ascii=False) if isinstance(exc.detail, dict) else str(exc.detail)
+        analysis_run.error_message = pipeline.error_message
+        analysis_run.completed_at = datetime.utcnow()
+        pipeline.updated_at = datetime.utcnow()
+        pipeline.completed_at = datetime.utcnow()
+        session.add(analysis_run)
+        session.add(pipeline)
+        session.commit()
+        raise
     except (json.JSONDecodeError, ValueError) as exc:
         pipeline.status = "failed" if pipeline.phase_a_status != "completed" else "phase_b_failed"
         if pipeline.phase_a_status != "completed":
@@ -628,6 +774,9 @@ def retry_phase_b(session: Session, owned_card_id: int) -> dict[str, Any]:
     analysis_run = session.get(AnalysisRun, pipeline.analysis_run_id) if pipeline.analysis_run_id else None
     if analysis_run is None:
         raise HTTPException(status_code=404, detail="Pipeline analysis run not found.")
+    selected_model_name = resolve_remote_worker_model() if LOCAL_AI_MODE == "remote_worker" else resolve_server_local_model()
+    analysis_run.model_name = selected_model_name
+    pipeline.model_parameters_json = json.dumps({**pipeline_model_parameters(), "model_name": selected_model_name}, ensure_ascii=True)
     preprocessing = preprocess_owned_card(session, owned_card_id) if ENABLE_IMAGE_PREPROCESSING else processed_payload(session, owned_card_id)
     assets = create_assets_for_pipeline(session, analysis_run.id, owned_card_id, preprocessing)
     phase_a_result = json_loads(pipeline.phase_a_result_json, {})

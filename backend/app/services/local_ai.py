@@ -1,6 +1,7 @@
 import base64
 import hashlib
 import json
+import logging
 import mimetypes
 import re
 import urllib.error
@@ -17,6 +18,7 @@ from sqlmodel import Session, select
 from ..config import (
     AI_WORKER_SHARED_TOKEN,
     LOCAL_AI_BASE_URL,
+    LOCAL_AI_CONNECT_TIMEOUT_SECONDS,
     LOCAL_AI_DISABLE_THINKING,
     LOCAL_AI_ENABLED,
     LOCAL_AI_MAX_IMAGES,
@@ -24,6 +26,8 @@ from ..config import (
     LOCAL_AI_MODE,
     LOCAL_AI_MODEL_NAME,
     LOCAL_AI_PROVIDER,
+    LOCAL_AI_READ_TIMEOUT_SECONDS,
+    LOCAL_AI_STREAMING_ENABLED,
     LOCAL_AI_TIMEOUT_SECONDS,
     LOCAL_AI_WORKER_BASE_URL,
     MEDIA_DIR,
@@ -31,6 +35,7 @@ from ..config import (
 )
 from ..models import AnalysisAsset, AnalysisFinding, AnalysisRun, Card, CenteringMeasurement, OwnedCard
 
+logger = logging.getLogger(__name__)
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 LOCAL_AI_ANALYSIS_VERSION = "local_ai_fast_v1"
 LOCAL_AI_PROMPT_VERSION = "local_vision_v2_evidence_guarded"
@@ -108,6 +113,11 @@ ALLOWED_FINDING_TYPES = {
 ALLOWED_SEVERITIES = {"none", "very_minor", "minor", "moderate", "severe"}
 ALLOWED_GRADE_IMPACTS = {"none", "low", "medium", "high"}
 ALLOWED_SIDES = {"front", "back", "unknown"}
+VISION_MODEL_PREFERENCES = [
+    "qwen/qwen3-vl-30b",
+    "qwen/qwen3-vl-8b",
+    "qwen/qwen2.5-vl-7b",
+]
 
 
 def is_localhost_url(base_url: str) -> bool:
@@ -134,9 +144,10 @@ def http_json(
     request_headers = {"Content-Type": "application/json", **(headers or {})}
     if body is not None:
         data = json.dumps(body).encode("utf-8")
+        logger.info("AI HTTP %s %s payload_bytes=%s", method, url, len(data))
     request = urllib.request.Request(url, data=data, method=method, headers=request_headers)
     try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds or LOCAL_AI_TIMEOUT_SECONDS) as response:
+        with urllib.request.urlopen(request, timeout=timeout_seconds or LOCAL_AI_READ_TIMEOUT_SECONDS or LOCAL_AI_TIMEOUT_SECONDS) as response:
             return json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         body_text = exc.read().decode("utf-8", errors="replace")
@@ -164,6 +175,23 @@ def models_from_response(response: dict[str, Any]) -> list[str]:
     return []
 
 
+def select_preferred_vision_model(models: list[str]) -> str:
+    if not models:
+        return ""
+    normalized = [(model, model.lower()) for model in models]
+    for preference in VISION_MODEL_PREFERENCES:
+        for model, lowered in normalized:
+            if preference in lowered:
+                return model
+    for model, lowered in normalized:
+        if "vl" in lowered:
+            return model
+    for model, lowered in normalized:
+        if "vision" in lowered:
+            return model
+    return models[0]
+
+
 class LocalAIProvider:
     mode = "disabled"
     server_role = "server_app"
@@ -182,13 +210,19 @@ class LocalAIProvider:
         return is_localhost_url(self.base_url)
 
     def config(self) -> dict[str, Any]:
+        model_name = LOCAL_AI_MODEL_NAME
+        if not model_name and self.mode == "server_local":
+            try:
+                model_name = self.selected_model_name()
+            except Exception:
+                model_name = ""
         return {
             "mode": self.mode,
             "enabled": LOCAL_AI_ENABLED,
             "provider": LOCAL_AI_PROVIDER,
             "base_url": self.base_url,
             "worker_base_url": self.worker_base_url,
-            "model_name": LOCAL_AI_MODEL_NAME,
+            "model_name": model_name or "auto",
             "timeout_seconds": LOCAL_AI_TIMEOUT_SECONDS,
             "max_images": LOCAL_AI_MAX_IMAGES,
             "max_tokens": LOCAL_AI_MAX_TOKENS,
@@ -205,7 +239,7 @@ class LocalAIProvider:
             "provider": LOCAL_AI_PROVIDER,
             "base_url": self.base_url,
             "worker_base_url": self.worker_base_url,
-            "model_name": LOCAL_AI_MODEL_NAME,
+            "model_name": LOCAL_AI_MODEL_NAME or "auto",
             "is_localhost": self.is_localhost,
             "reachable": False,
             "worker_reachable": False,
@@ -222,13 +256,16 @@ class LocalAIProvider:
             "mode": self.mode,
             "worker_reachable": False,
             "models": [],
-            "selected_model": LOCAL_AI_MODEL_NAME,
+            "selected_model": LOCAL_AI_MODEL_NAME or "auto",
             "selected_model_found": False,
             "message": "Local AI is disabled.",
         }
 
     def require_ready(self) -> None:
         raise HTTPException(status_code=400, detail="Local AI is disabled.")
+
+    def selected_model_name(self) -> str:
+        return LOCAL_AI_MODEL_NAME
 
     def call_chat(self, prompt: str, assets: list[AnalysisAsset]) -> tuple[str, str, bool]:
         raise HTTPException(status_code=400, detail="Local AI is disabled.")
@@ -255,11 +292,17 @@ class LMStudioDirectProvider(LocalAIProvider):
             raise HTTPException(status_code=400, detail="Local AI is disabled.")
         if not self.is_localhost:
             raise HTTPException(status_code=400, detail="LOCAL_AI_BASE_URL must be localhost in server_local mode.")
-        if not LOCAL_AI_MODEL_NAME:
-            raise HTTPException(status_code=400, detail="LOCAL_AI_MODEL_NAME is not configured.")
         unsupported_message = self._unsupported_provider_message()
         if unsupported_message:
             raise HTTPException(status_code=400, detail=unsupported_message)
+        if not self.selected_model_name():
+            raise HTTPException(status_code=400, detail="No local vision model is loaded or configured.")
+
+    def selected_model_name(self) -> str:
+        if LOCAL_AI_MODEL_NAME and LOCAL_AI_MODEL_NAME.lower() != "auto":
+            return LOCAL_AI_MODEL_NAME
+        response = http_json("GET", f"{self.base_url.rstrip('/')}/models", timeout_seconds=LOCAL_AI_CONNECT_TIMEOUT_SECONDS)
+        return select_preferred_vision_model(models_from_response(response))
 
     def test_connection(self) -> dict[str, Any]:
         if not LOCAL_AI_ENABLED:
@@ -272,23 +315,28 @@ class LMStudioDirectProvider(LocalAIProvider):
                 "mode": self.mode,
                 "worker_reachable": False,
                 "models": [],
-                "selected_model": LOCAL_AI_MODEL_NAME,
+                "selected_model": LOCAL_AI_MODEL_NAME or "auto",
                 "selected_model_found": False,
                 "message": unsupported_message,
             }
         if not self.is_localhost:
             raise HTTPException(status_code=400, detail="LOCAL_AI_BASE_URL must be localhost in server_local mode.")
         try:
-            response = http_json("GET", f"{self.base_url.rstrip('/')}/models", timeout_seconds=5)
+            response = http_json("GET", f"{self.base_url.rstrip('/')}/models", timeout_seconds=LOCAL_AI_CONNECT_TIMEOUT_SECONDS)
             models = models_from_response(response)
-            selected_model_found = LOCAL_AI_MODEL_NAME in models
+            if LOCAL_AI_MODEL_NAME and LOCAL_AI_MODEL_NAME.lower() != "auto":
+                selected_model = LOCAL_AI_MODEL_NAME
+                selected_model_found = selected_model in models
+            else:
+                selected_model = select_preferred_vision_model(models)
+                selected_model_found = bool(selected_model)
             return {
-                "ok": selected_model_found if LOCAL_AI_MODEL_NAME else True,
+                "ok": selected_model_found,
                 "reachable": True,
                 "mode": self.mode,
                 "worker_reachable": True,
                 "models": models,
-                "selected_model": LOCAL_AI_MODEL_NAME,
+                "selected_model": selected_model,
                 "selected_model_found": selected_model_found,
                 "message": (
                     "Local AI server is reachable."
@@ -303,7 +351,7 @@ class LMStudioDirectProvider(LocalAIProvider):
                 "mode": self.mode,
                 "worker_reachable": False,
                 "models": [],
-                "selected_model": LOCAL_AI_MODEL_NAME,
+                "selected_model": LOCAL_AI_MODEL_NAME or "auto",
                 "selected_model_found": False,
                 "message": f"Local AI server is not reachable: {exc}",
             }
@@ -323,40 +371,52 @@ class LMStudioDirectProvider(LocalAIProvider):
             return status
 
         try:
-            http_json("GET", f"{self.base_url.rstrip('/')}/models", timeout_seconds=5)
+            response = http_json("GET", f"{self.base_url.rstrip('/')}/models", timeout_seconds=LOCAL_AI_CONNECT_TIMEOUT_SECONDS)
+            models = models_from_response(response)
+            selected_model = LOCAL_AI_MODEL_NAME if LOCAL_AI_MODEL_NAME and LOCAL_AI_MODEL_NAME.lower() != "auto" else select_preferred_vision_model(models)
             status["reachable"] = True
             status["worker_reachable"] = True
+            status["model_name"] = selected_model or "auto"
             status["message"] = "Local AI server is reachable."
         except Exception as exc:
             status["message"] = f"Local AI server is not reachable: {exc}"
         return status
 
     def call_chat(self, prompt: str, assets: list[AnalysisAsset]) -> tuple[str, str, bool]:
+        model_name = self.selected_model_name()
+        if not model_name:
+            raise HTTPException(status_code=400, detail="No local vision model is loaded or configured.")
+        logger.info("Local AI request model=%s endpoint=%s images=%s", model_name, f"{self.base_url.rstrip('/')}/chat/completions", len(assets))
         messages_content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         messages_content.extend(data_url_for_asset(asset) for asset in assets)
         payload = {
-            "model": LOCAL_AI_MODEL_NAME,
+            "model": model_name,
             "messages": [{"role": "user", "content": messages_content}],
             "temperature": LOCAL_AI_TEMPERATURE,
             "max_tokens": LOCAL_AI_MAX_TOKENS,
             "response_format": LOCAL_AI_RESPONSE_FORMAT,
+            "stream": LOCAL_AI_STREAMING_ENABLED,
         }
         response = http_json("POST", f"{self.base_url.rstrip('/')}/chat/completions", payload)
         content, parsed_from_reasoning_content = content_from_chat_response(response)
         return content, json.dumps(response, ensure_ascii=False, indent=2), parsed_from_reasoning_content
 
     def call_text_repair(self, raw_output: str) -> tuple[str, str]:
+        model_name = self.selected_model_name()
+        if not model_name:
+            raise HTTPException(status_code=400, detail="No local vision model is loaded or configured.")
         prompt = (
             "Convert the following model output into the required JSON schema. Return JSON only. "
             "Start with { and end with }.\n\n"
             f"{raw_output}"
         )
         payload = {
-            "model": LOCAL_AI_MODEL_NAME,
+            "model": model_name,
             "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}]}],
             "temperature": LOCAL_AI_TEMPERATURE,
             "max_tokens": LOCAL_AI_MAX_TOKENS,
             "response_format": LOCAL_AI_RESPONSE_FORMAT,
+            "stream": LOCAL_AI_STREAMING_ENABLED,
         }
         response = http_json("POST", f"{self.base_url.rstrip('/')}/chat/completions", payload)
         content, _ = content_from_chat_response(response)
@@ -379,6 +439,11 @@ class RemoteWorkerProvider(LocalAIProvider):
     def config(self) -> dict[str, Any]:
         config = super().config()
         config["provider"] = "remote_worker"
+        if LOCAL_AI_ENABLED and self.worker_base_url:
+            try:
+                config["model_name"] = self.selected_model_name()
+            except Exception:
+                config["model_name"] = LOCAL_AI_MODEL_NAME or "auto"
         return config
 
     def _worker_status(self) -> dict[str, Any]:
@@ -388,7 +453,7 @@ class RemoteWorkerProvider(LocalAIProvider):
         last_error: Exception | None = None
         for path in ["/health", "/api/health", "/api/local-ai/status"]:
             try:
-                return http_json("GET", f"{base}{path}", timeout_seconds=5, headers=remote_worker_headers())
+                return http_json("GET", f"{base}{path}", timeout_seconds=LOCAL_AI_CONNECT_TIMEOUT_SECONDS, headers=remote_worker_headers())
             except LocalAIHTTPError as exc:
                 last_error = exc
                 continue
@@ -396,6 +461,17 @@ class RemoteWorkerProvider(LocalAIProvider):
                 last_error = exc
                 break
         raise ValueError(f"Remote Local AI worker is not reachable: {last_error}")
+
+    def selected_model_name(self) -> str:
+        if LOCAL_AI_MODEL_NAME and LOCAL_AI_MODEL_NAME.lower() != "auto":
+            return LOCAL_AI_MODEL_NAME
+        worker_status = self._worker_status()
+        model = str(worker_status.get("model_name") or worker_status.get("model") or "").strip()
+        if model:
+            return model
+        raw_models = worker_status.get("models")
+        models = [str(item) for item in raw_models] if isinstance(raw_models, list) else []
+        return select_preferred_vision_model(models)
 
     def status(self) -> dict[str, Any]:
         status = super().status()
@@ -410,9 +486,16 @@ class RemoteWorkerProvider(LocalAIProvider):
         try:
             worker_status = self._worker_status()
             worker_model = worker_status.get("model_name") or worker_status.get("model") or LOCAL_AI_MODEL_NAME
+            raw_models = worker_status.get("models")
+            models = [str(item) for item in raw_models] if isinstance(raw_models, list) else ([str(worker_model)] if worker_model else [])
+            selected_model = (
+                LOCAL_AI_MODEL_NAME
+                if LOCAL_AI_MODEL_NAME and LOCAL_AI_MODEL_NAME.lower() != "auto"
+                else select_preferred_vision_model(models) or str(worker_model or "")
+            )
             status["reachable"] = True
             status["worker_reachable"] = True
-            status["model_name"] = worker_model
+            status["model_name"] = selected_model or "auto"
             status["vision_capable"] = str(worker_status.get("vision_capable") or "unknown")
             if worker_status.get("lm_studio_reachable") is False:
                 status["message"] = "Remote AI worker is reachable, but LM Studio is not reachable on the Windows client."
@@ -430,7 +513,12 @@ class RemoteWorkerProvider(LocalAIProvider):
             model = str(worker_status.get("model_name") or worker_status.get("model") or LOCAL_AI_MODEL_NAME or "")
             raw_models = worker_status.get("models")
             models = [str(item) for item in raw_models] if isinstance(raw_models, list) else ([model] if model else [])
-            selected_model_found = not LOCAL_AI_MODEL_NAME or LOCAL_AI_MODEL_NAME in models or LOCAL_AI_MODEL_NAME == model
+            if LOCAL_AI_MODEL_NAME and LOCAL_AI_MODEL_NAME.lower() != "auto":
+                selected_model = LOCAL_AI_MODEL_NAME
+                selected_model_found = LOCAL_AI_MODEL_NAME in models or LOCAL_AI_MODEL_NAME == model
+            else:
+                selected_model = select_preferred_vision_model(models) or model
+                selected_model_found = bool(selected_model)
             lm_studio_reachable = worker_status.get("lm_studio_reachable") is not False
             return {
                 "ok": selected_model_found and lm_studio_reachable,
@@ -438,7 +526,7 @@ class RemoteWorkerProvider(LocalAIProvider):
                 "mode": self.mode,
                 "worker_reachable": True,
                 "models": models,
-                "selected_model": LOCAL_AI_MODEL_NAME,
+                "selected_model": selected_model or "auto",
                 "selected_model_found": selected_model_found,
                 "message": (
                     "Remote Local AI worker is reachable."
@@ -453,7 +541,7 @@ class RemoteWorkerProvider(LocalAIProvider):
                 "mode": self.mode,
                 "worker_reachable": False,
                 "models": [],
-                "selected_model": LOCAL_AI_MODEL_NAME,
+                "selected_model": LOCAL_AI_MODEL_NAME or "auto",
                 "selected_model_found": False,
                 "message": str(exc),
             }
@@ -506,6 +594,13 @@ def test_local_ai_connection() -> dict[str, Any]:
 
 def local_ai_status() -> dict[str, Any]:
     return active_local_ai_provider().status()
+
+
+def effective_local_ai_model_name() -> str:
+    try:
+        return active_local_ai_provider().selected_model_name() or LOCAL_AI_MODEL_NAME or "auto"
+    except Exception:
+        return LOCAL_AI_MODEL_NAME or "auto"
 
 
 def latest_completed_opencv_run(session: Session, owned_card_id: int) -> AnalysisRun | None:
@@ -635,6 +730,7 @@ def model_parameters() -> dict[str, Any]:
         "max_tokens": LOCAL_AI_MAX_TOKENS,
         "response_format": LOCAL_AI_RESPONSE_FORMAT,
         "disable_thinking": LOCAL_AI_DISABLE_THINKING,
+        "stream": LOCAL_AI_STREAMING_ENABLED,
     }
 
 
@@ -1347,6 +1443,8 @@ def remote_grade_payload(
         "image_labels": selected_asset_labels(assets),
         "analysis_scope": analysis_scope_for_assets(assets, "remote_ai_grade"),
         "model_parameters": model_parameters(),
+        "model_name": LOCAL_AI_MODEL_NAME or "auto",
+        "stream": LOCAL_AI_STREAMING_ENABLED,
         "prompt_rules": [
             "Only report defects visible in the provided images.",
             "Every detected_issues[].area must be one of allowed_areas.",
@@ -1364,12 +1462,15 @@ def remote_ai_grade_http(payload: dict[str, Any]) -> dict[str, Any]:
     if not LOCAL_AI_WORKER_BASE_URL.strip():
         raise HTTPException(status_code=400, detail="LOCAL_AI_WORKER_BASE_URL is not configured.")
     url = f"{LOCAL_AI_WORKER_BASE_URL.rstrip('/')}/api/ai/grade"
+    payload_bytes = len(json.dumps(payload).encode("utf-8"))
     print(
         "Remote AI worker request",
         {
             "url": url,
             "timeout": LOCAL_AI_TIMEOUT_SECONDS,
             "images": len(payload.get("images", [])),
+            "payload_bytes": payload_bytes,
+            "model": payload.get("model_name") or LOCAL_AI_MODEL_NAME or "auto",
         },
     )
     try:
@@ -1390,7 +1491,7 @@ def remote_ai_grade_http(payload: dict[str, Any]) -> dict[str, Any]:
                 "response_preview": exc.response_body[:1000],
             },
         ) from exc
-    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+    except (BrokenPipeError, urllib.error.URLError, TimeoutError, OSError) as exc:
         print(f"Remote AI worker unreachable: {exc}")
         raise HTTPException(
             status_code=502,
@@ -1401,6 +1502,10 @@ def remote_ai_grade_http(payload: dict[str, Any]) -> dict[str, Any]:
                     "CardGrader backend could not reach the Windows AI worker. "
                     "Check Tailscale, worker service, firewall, and LM Studio."
                 ),
+                "selected_model": payload.get("model_name") or LOCAL_AI_MODEL_NAME or "auto",
+                "endpoint": url,
+                "payload_size_bytes": payload_bytes,
+                "images_sent": len(payload.get("images", [])),
             },
         ) from exc
 
@@ -1603,20 +1708,21 @@ def run_remote_ai_grade(session: Session, owned_card_id: int) -> dict[str, Any]:
     if analysis_scope == "partial":
         add_warning(guardrail_warnings, "limited_image_set")
     add_stale_image_payload_warnings(session, owned_card_id, payload_metadata, guardrail_warnings)
+    selected_model_name = effective_local_ai_model_name()
 
     analysis_run = AnalysisRun(
         owned_card_id=owned_card_id,
         mode="remote_ai_grade",
         status="running",
         model_provider="remote_worker",
-        model_name=LOCAL_AI_MODEL_NAME,
+        model_name=selected_model_name,
         prompt_version="remote_worker_grade_v1",
         analysis_version="remote_ai_worker_v1",
         centering_score=opencv_run.centering_score,
         image_labels_json=json.dumps(image_labels, ensure_ascii=True),
         allowed_areas_json=json.dumps(allowed_areas, ensure_ascii=True),
         warnings_json=json.dumps(guardrail_warnings, ensure_ascii=True),
-        model_parameters_json=json.dumps(model_parameters(), ensure_ascii=True),
+        model_parameters_json=json.dumps({**model_parameters(), "model_name": selected_model_name}, ensure_ascii=True),
         analysis_scope=analysis_scope,
         image_payload_json=json.dumps(payload_metadata, ensure_ascii=True, default=str),
     )
@@ -1625,6 +1731,7 @@ def run_remote_ai_grade(session: Session, owned_card_id: int) -> dict[str, Any]:
     session.refresh(analysis_run)
 
     payload = remote_grade_payload(session, owned_card, card, opencv_run, assets, payload_metadata)
+    payload["model_name"] = selected_model_name
     try:
         worker_response = remote_ai_grade_http(payload)
         save_text_asset(
@@ -1671,7 +1778,7 @@ def run_remote_ai_grade(session: Session, owned_card_id: int) -> dict[str, Any]:
         finding_count = save_remote_worker_findings(session, analysis_run, filtered_issues)
 
         analysis_run.status = "completed"
-        analysis_run.model_name = str(worker_response.get("model") or LOCAL_AI_MODEL_NAME or "")
+        analysis_run.model_name = str(worker_response.get("model") or selected_model_name)
         if analysis_scope == "full":
             analysis_run.overall_score = score_value(result.get("estimated_grade"))
             analysis_run.estimated_grade_low = grade_range_value(grade_range.get("low"))
@@ -1765,19 +1872,20 @@ def local_ai_debug_single_image(session: Session, owned_card_id: int, image_labe
     payload_metadata = image_payload_metadata(debug_assets, owned_card, card)
     warnings = ["limited_image_set"]
     add_stale_image_payload_warnings(session, owned_card_id, payload_metadata, warnings)
+    selected_model_name = effective_local_ai_model_name()
 
     analysis_run = AnalysisRun(
         owned_card_id=owned_card_id,
         mode="local_ai_debug_single_image",
         status="running",
         model_provider=LOCAL_AI_PROVIDER,
-        model_name=LOCAL_AI_MODEL_NAME,
+        model_name=selected_model_name,
         prompt_version="local_vision_debug_v1",
         analysis_version="local_ai_debug_single_image_v1",
         image_labels_json=json.dumps(image_labels, ensure_ascii=True),
         allowed_areas_json=json.dumps(allowed_areas, ensure_ascii=True),
         warnings_json=json.dumps(warnings, ensure_ascii=True),
-        model_parameters_json=json.dumps(model_parameters(), ensure_ascii=True),
+        model_parameters_json=json.dumps({**model_parameters(), "model_name": selected_model_name}, ensure_ascii=True),
         analysis_scope="partial",
         image_payload_json=json.dumps(payload_metadata, ensure_ascii=True, default=str),
         recommendation="partial_analysis",
@@ -1799,11 +1907,12 @@ def local_ai_debug_single_image(session: Session, owned_card_id: int, image_labe
             f"{prompt}\n/no_think"
         )
     payload = {
-        "model": LOCAL_AI_MODEL_NAME,
+        "model": selected_model_name,
         "messages": [{"role": "user", "content": [{"type": "text", "text": prompt}, data_url_for_asset(asset)]}],
         "temperature": LOCAL_AI_TEMPERATURE,
         "max_tokens": LOCAL_AI_MAX_TOKENS,
         "response_format": LOCAL_AI_RESPONSE_FORMAT,
+        "stream": LOCAL_AI_STREAMING_ENABLED,
     }
     try:
         response = http_json("POST", f"{LOCAL_AI_BASE_URL.rstrip('/')}/chat/completions", payload)
@@ -1833,13 +1942,13 @@ def local_ai_debug_single_image(session: Session, owned_card_id: int, image_labe
             error_message = str(exc)
         return {
             "status": "completed",
-            "model": LOCAL_AI_MODEL_NAME,
+            "model": selected_model_name,
             "image_label_sent": asset.label,
             "image_payload": payload_metadata,
             "allowed_issue_areas": allowed_areas,
             "warnings": warnings,
             "analysis_scope": "partial",
-            "model_parameters": model_parameters(),
+            "model_parameters": {**model_parameters(), "model_name": selected_model_name},
             "finish_reason": finish_reason,
             "content": content,
             "reasoning_content_present": bool(reasoning_content),
@@ -1858,13 +1967,13 @@ def local_ai_debug_single_image(session: Session, owned_card_id: int, image_labe
         session.commit()
         return {
             "status": "failed",
-            "model": LOCAL_AI_MODEL_NAME,
+            "model": selected_model_name,
             "image_label_sent": asset.label,
             "image_payload": payload_metadata,
             "allowed_issue_areas": allowed_areas,
             "warnings": warnings,
             "analysis_scope": "partial",
-            "model_parameters": model_parameters(),
+            "model_parameters": {**model_parameters(), "model_name": selected_model_name},
             "finish_reason": None,
             "content": "LM Studio hibát adott vissza. Részletek a lokális debug fájlban.",
             "reasoning_content_present": False,
@@ -1900,19 +2009,20 @@ def run_local_ai_pass(session: Session, owned_card_id: int, pass_type: str = "fa
     if analysis_scope == "partial":
         add_warning(guardrail_warnings, "limited_image_set")
     add_stale_image_payload_warnings(session, owned_card_id, payload_metadata, guardrail_warnings)
+    selected_model_name = effective_local_ai_model_name()
 
     analysis_run = AnalysisRun(
         owned_card_id=owned_card_id,
         mode=f"local_ai_{pass_type}",
         status="running",
         model_provider=LOCAL_AI_PROVIDER,
-        model_name=LOCAL_AI_MODEL_NAME,
+        model_name=selected_model_name,
         prompt_version=LOCAL_AI_PROMPT_VERSION,
         analysis_version=f"local_ai_{pass_type}_v1",
         image_labels_json=json.dumps(image_labels, ensure_ascii=True),
         allowed_areas_json=json.dumps(allowed_areas, ensure_ascii=True),
         warnings_json=json.dumps(guardrail_warnings, ensure_ascii=True),
-        model_parameters_json=json.dumps(model_parameters(), ensure_ascii=True),
+        model_parameters_json=json.dumps({**model_parameters(), "model_name": selected_model_name}, ensure_ascii=True),
         analysis_scope=analysis_scope,
         image_payload_json=json.dumps(payload_metadata, ensure_ascii=True, default=str),
     )
@@ -2091,12 +2201,13 @@ def run_local_ai_aggregate(session: Session, owned_card_id: int) -> dict[str, An
 
     opencv_run = latest_completed_opencv_run(session, owned_card_id)
     centering_score = opencv_run.centering_score if opencv_run else None
+    selected_model_name = effective_local_ai_model_name()
     aggregate_run = AnalysisRun(
         owned_card_id=owned_card_id,
         mode="local_ai_aggregate",
         status="completed",
         model_provider=LOCAL_AI_PROVIDER,
-        model_name=LOCAL_AI_MODEL_NAME,
+        model_name=selected_model_name,
         prompt_version="local_vision_aggregate_v1",
         analysis_version="local_ai_aggregate_v1",
         centering_score=centering_score,
