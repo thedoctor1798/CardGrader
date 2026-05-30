@@ -1,6 +1,8 @@
 import type {
   AnalysisReport,
   AnalysisRunDetail,
+  AIGradingPipelineStatus,
+  AIGradingStartResponse,
   AnalysisRun,
   AnalysisFinding,
   AnnotationResponse,
@@ -43,6 +45,7 @@ import type {
   PriceProviderTestResponse,
   PriceProvidersStatusResponse,
   PriceRefreshResponse,
+  ProcessedImagesResponse,
   ResetLocalDataResponse,
 } from "./types";
 
@@ -195,6 +198,25 @@ export const api = {
   getAnalysisRunDetail: (analysisRunId: number) => request<AnalysisRunDetail>(`/api/analysis-runs/${analysisRunId}`),
   runOpenCvAnalysis: (ownedCardId: number) =>
     request<AnalysisRun>(`/api/owned-cards/${ownedCardId}/analyze/opencv`, { method: "POST" }),
+  getProcessedImages: (ownedCardId: number) => request<ProcessedImagesResponse>(`/api/cards/${ownedCardId}/processed`),
+  runSmartPreprocessing: (ownedCardId: number) =>
+    request<ProcessedImagesResponse>(`/api/cards/${ownedCardId}/preprocess`, { method: "POST" }),
+  saveManualBoundary: (ownedCardId: number, side: "front" | "back", manualCorners: number[][]) =>
+    request<Record<string, unknown>>(`/api/cards/${ownedCardId}/boundary`, {
+      method: "POST",
+      body: JSON.stringify({ side, manual_corners: manualCorners }),
+    }),
+  recalculateSmartCentering: (ownedCardId: number, side?: "front" | "back") =>
+    request<ProcessedImagesResponse>(`/api/cards/${ownedCardId}/centering/recalculate`, {
+      method: "POST",
+      body: JSON.stringify({ side: side ?? null }),
+    }),
+  startAIGrading: (ownedCardId: number) =>
+    request<AIGradingStartResponse>(`/api/cards/${ownedCardId}/ai-grade/start`, { method: "POST" }),
+  retryAIGradingPhaseB: (ownedCardId: number) =>
+    request<AIGradingStartResponse>(`/api/cards/${ownedCardId}/ai-grade/retry-phase-b`, { method: "POST" }),
+  getAIGradingStatus: (ownedCardId: number) =>
+    request<AIGradingPipelineStatus>(`/api/cards/${ownedCardId}/ai-grade/status`),
   runLocalAIFastAnalysis: (ownedCardId: number) =>
     request<LocalAIAnalysisResponse>(`/api/owned-cards/${ownedCardId}/analyze/local-ai-fast`, { method: "POST" }),
   runLocalAIFrontAnalysis: (ownedCardId: number) =>

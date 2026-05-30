@@ -269,6 +269,51 @@ class AnalysisAsset(SQLModel, table=True):
     created_at: datetime = Field(default_factory=utc_now)
 
 
+class ProcessedCardImage(SQLModel, table=True):
+    __tablename__ = "processed_card_images"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    owned_card_id: int = Field(foreign_key="owned_cards.id", index=True)
+    media_id: Optional[int] = Field(default=None, foreign_key="card_media.id", index=True)
+    side: str = Field(index=True)
+    preprocessing_version: str = "phase16_v1"
+    status: str = Field(default="pending", index=True)
+    generated_images_json: Optional[str] = None
+    analysis_json_path: Optional[str] = None
+    preprocessing_warnings_json: Optional[str] = None
+    auto_corners_json: Optional[str] = None
+    manual_corners_json: Optional[str] = None
+    final_corners_json: Optional[str] = None
+    boundary_source: Optional[str] = None
+    boundary_confidence: Optional[float] = None
+    centering_json: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    completed_at: Optional[datetime] = None
+
+
+class AIGradingPipelineRun(SQLModel, table=True):
+    __tablename__ = "ai_grading_pipeline_runs"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    owned_card_id: int = Field(foreign_key="owned_cards.id", index=True)
+    analysis_run_id: Optional[int] = Field(default=None, foreign_key="analysis_runs.id", index=True)
+    status: str = Field(default="pending", index=True)
+    phase_a_status: Optional[str] = None
+    phase_b_status: Optional[str] = None
+    phase_a_result_json: Optional[str] = None
+    phase_b_result_json: Optional[str] = None
+    final_result_json: Optional[str] = None
+    preprocessing_snapshot_json: Optional[str] = None
+    model_parameters_json: Optional[str] = None
+    warnings_json: Optional[str] = None
+    error_message: Optional[str] = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+    completed_at: Optional[datetime] = None
+
+
 class CollectionSnapshot(SQLModel, table=True):
     __tablename__ = "collection_snapshots"
 

@@ -80,6 +80,14 @@ class GradeRequest(BaseModel):
     grading_profile: str = "pokemon_tcg_default"
 
 
+class VisionJsonRequest(BaseModel):
+    prompt: str
+    images: list[WorkerImage] = Field(default_factory=list)
+    max_tokens: int | None = None
+    response_format: str | None = "json_object"
+    phase: str | None = None
+
+
 class RecognizeCardRequest(BaseModel):
     media_id: str | None = None
     images: list[WorkerImage] = Field(default_factory=list)
@@ -379,6 +387,35 @@ def lm_studio_recognition_payload(request: RecognizeCardRequest, model: str) -> 
     }
 
 
+def lm_studio_vision_json_payload(request: VisionJsonRequest, model: str) -> dict[str, Any]:
+    content: list[dict[str, Any]] = [{"type": "text", "text": request.prompt}]
+    for image in request.images:
+        content.append(
+            {
+                "type": "image_url",
+                "image_url": {"url": f"data:{image.mime_type};base64,{image.base64}"},
+            }
+        )
+    requested_tokens = request.max_tokens or AI_WORKER_MAX_TOKENS
+    max_tokens = min(requested_tokens, AI_WORKER_MAX_TOKENS)
+    if requested_tokens != max_tokens:
+        logger.warning(
+            "Requested max_tokens=%s exceeds AI_WORKER_MAX_TOKENS=%s; using %s",
+            requested_tokens,
+            AI_WORKER_MAX_TOKENS,
+            max_tokens,
+        )
+    payload = {
+        "model": model,
+        "messages": [{"role": "user", "content": content}],
+        "temperature": 0,
+        "max_tokens": max_tokens,
+    }
+    if request.response_format == "json_object":
+        payload["response_format"] = {"type": "json_object"}
+    return payload
+
+
 from fastapi import FastAPI
 
 app = FastAPI(title="CardGrader AI Worker")
@@ -471,6 +508,84 @@ def grade_card(request: GradeRequest, _: None = Depends(require_token)) -> JSONR
         )
     except (urllib.error.URLError, TimeoutError, OSError) as exc:
         logger.warning("LM Studio call failed: %s", exc)
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "lm_studio_unreachable",
+                "message": "LM Studio is not reachable or timed out.",
+                **image_debug,
+            }
+        )
+
+
+@app.post("/api/ai/vision-json")
+def vision_json(request: VisionJsonRequest, _: None = Depends(require_token)) -> JSONResponse:
+    started = time.perf_counter()
+    logger.info("Vision JSON request received phase=%s images=%s", request.phase, len(request.images))
+    try:
+        request.images = validate_images(request.images)
+    except ValueError as exc:
+        logger.warning("Vision JSON validation failed: %s", exc)
+        return JSONResponse({"ok": False, "error": "invalid_request", "message": str(exc)})
+    image_debug = received_image_debug(request.images)
+
+    try:
+        model = selected_model()
+        if not model:
+            return JSONResponse({"ok": False, "error": "model_not_found", "message": "No LM Studio model is loaded.", **image_debug})
+    except Exception as exc:
+        logger.warning("LM Studio is not reachable: %s", exc)
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "lm_studio_unreachable",
+                "message": "LM Studio is not reachable on the Windows client.",
+                **image_debug,
+            }
+        )
+
+    try:
+        lm_payload = lm_studio_vision_json_payload(request, model)
+        response = http_json("POST", f"{LM_STUDIO_BASE_URL}/chat/completions", lm_payload)
+        duration = round(time.perf_counter() - started, 2)
+        raw_content = response_content(response)
+        try:
+            parsed = parse_model_json(raw_content)
+        except Exception as exc:
+            logger.warning("Vision JSON parse failed after %.2fs: %s", duration, exc)
+            return JSONResponse(
+                {
+                    "ok": False,
+                    "error": "model_response_not_valid_json",
+                    "raw_response_preview": raw_content[:1000],
+                    **image_debug,
+                }
+            )
+        logger.info("Vision JSON request completed phase=%s duration=%.2fs", request.phase, duration)
+        return JSONResponse(
+            {
+                "ok": True,
+                "result": parsed,
+                "model": model,
+                "duration_seconds": duration,
+                "raw_response_preview": raw_content[:500],
+                **image_debug,
+            }
+        )
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")
+        logger.warning("LM Studio returned HTTP %s for vision JSON", exc.code)
+        return JSONResponse(
+            {
+                "ok": False,
+                "error": "lm_studio_http_error",
+                "message": f"LM Studio returned HTTP {exc.code}.",
+                "raw_response_preview": body[:1000],
+                **image_debug,
+            }
+        )
+    except (urllib.error.URLError, TimeoutError, OSError) as exc:
+        logger.warning("LM Studio vision JSON call failed: %s", exc)
         return JSONResponse(
             {
                 "ok": False,

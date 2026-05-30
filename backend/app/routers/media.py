@@ -1,4 +1,5 @@
 import json
+import logging
 from pathlib import Path
 from typing import List, Optional
 from uuid import uuid4
@@ -8,12 +9,13 @@ from fastapi.responses import FileResponse
 from PIL import Image, ImageEnhance, UnidentifiedImageError
 from sqlmodel import Session, select
 
-from ..config import MEDIA_DIR, ROOT
+from ..config import ENABLE_IMAGE_PREPROCESSING, MEDIA_DIR, ROOT
 from ..database import get_session
 from ..models import CardMedia, OwnedCard
 from ..schemas import CardMediaRead, DerivedMediaCreate, MediaUploadResponse
 
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
 ALLOWED_LABELS = {
     "front",
@@ -198,6 +200,13 @@ async def upload_owned_card_media(
     session.add(media)
     session.commit()
     session.refresh(media)
+    if ENABLE_IMAGE_PREPROCESSING and normalized_media_type == "image" and normalized_label in {"front", "back"}:
+        try:
+            from ..services.image_preprocessing import preprocess_side
+
+            preprocess_side(session, owned_card_id, normalized_label)
+        except Exception as exc:
+            logger.exception("Automatic preprocessing after upload failed media_id=%s: %s", media.id, exc)
     return media
 
 

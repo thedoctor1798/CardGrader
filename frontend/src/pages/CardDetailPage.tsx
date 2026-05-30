@@ -5,6 +5,7 @@ import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YA
 import { api, mediaUrl } from "../api/client";
 import type {
   AnalysisAsset,
+  AIGradingPipelineStatus,
   AnalysisFinding,
   AnalysisImagePayload,
   AnalysisReport,
@@ -20,6 +21,8 @@ import type {
   PriceHistoryEntry,
   PriceObservation,
   PriceProviderStatus,
+  ProcessedImagesResponse,
+  ProcessedSide,
   RemoteAIGradeResponse,
   RemoteAIWorkerResult,
   RecognitionResponse,
@@ -45,6 +48,16 @@ const mediaLabels = [
 ];
 const statuses = ["raw_owned", "graded_owned", "sent_to_grading", "listed_for_sale", "sold", "kept_long_term"];
 const sources = ["pack", "blister", "single_purchase", "trade", "unknown"];
+const processedVariantOptions = [
+  ["original_normalized", "Original"],
+  ["grayscale_clahe", "Grayscale + CLAHE"],
+  ["sobel_edges", "Sobel Edges"],
+  ["emboss_surface", "Emboss Surface"],
+  ["highpass_texture", "High Pass Texture"],
+  ["canny_edges", "Canny Edges"],
+  ["perspective_corrected", "Perspective Corrected"],
+  ["centering_debug", "Centering Debug"],
+] as const;
 
 type CardDetailPageProps = {
   ownedCardId: number;
@@ -403,6 +416,63 @@ function RemoteAIGradePanel({ response }: { response: RemoteAIGradeResponse }) {
   );
 }
 
+function SmartGradePanel({ pipeline, onRetryPhaseB }: { pipeline: AIGradingPipelineStatus | null; onRetryPhaseB: () => void }) {
+  if (!pipeline || pipeline.status === "not_started") return null;
+  const final = pipeline.final_result;
+  const phaseAFinished = pipeline.phase_a_status === "completed";
+  const phaseBFinished = pipeline.phase_b_status === "completed";
+  const phaseBFailed = pipeline.phase_b_status === "failed" || pipeline.status === "phase_b_failed";
+  return (
+    <div className="mt-4 rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-4 text-sm text-emerald-50">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="font-semibold">Two-phase AI grading</div>
+          <div className="mt-1 text-xs opacity-80">Status: {pipeline.status}</div>
+        </div>
+        <div className="text-right">
+          <div className="text-2xl font-semibold">{final?.estimated_grade ?? "-"}</div>
+          <div className="text-xs opacity-80">Final estimate</div>
+        </div>
+      </div>
+      <div className="mt-4 grid gap-2 sm:grid-cols-2">
+        <StatCard label="Step 1" value={phaseAFinished ? "Completed" : pipeline.phase_a_status ?? "Pending"} />
+        <StatCard label="Step 2" value={phaseBFinished ? "Completed" : pipeline.phase_b_status ?? "Pending"} />
+        <StatCard label="Range" value={final?.grade_range ?? "-"} />
+        <StatCard label="Confidence" value={final?.confidence !== undefined ? formatNumber(final.confidence, 2) : "-"} />
+      </div>
+      {final?.subgrades && (
+        <div className="mt-3 grid grid-cols-2 gap-2">
+          <StatCard label="Centering" value={final.subgrades.centering ?? "-"} />
+          <StatCard label="Corners" value={final.subgrades.corners ?? "-"} />
+          <StatCard label="Edges" value={final.subgrades.edges ?? "-"} />
+          <StatCard label="Surface" value={final.subgrades.surface ?? "-"} />
+        </div>
+      )}
+      {final?.reasoning_summary && <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-slate-100">{final.reasoning_summary}</div>}
+      {final?.risk_flags?.length ? (
+        <div className="mt-3 flex flex-wrap gap-2">
+          {final.risk_flags.map((flag) => <span key={flag} className="rounded-full border border-amber-500/30 px-2 py-0.5 text-xs text-amber-100">{flag}</span>)}
+        </div>
+      ) : null}
+      {phaseBFailed && (
+        <button className="mt-3 inline-flex items-center justify-center gap-2 rounded-lg border border-amber-500/40 px-3 py-2 text-sm font-medium text-amber-100 hover:bg-amber-500/10" onClick={onRetryPhaseB} type="button">
+          <RefreshCw size={16} /> Retry Phase B
+        </button>
+      )}
+      <details className="mt-3">
+        <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-emerald-200">Developer details</summary>
+        <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded bg-slate-950/70 p-3 text-xs text-slate-200">{JSON.stringify({
+          phase_a: pipeline.phase_a_result,
+          final: pipeline.final_result,
+          warnings: pipeline.warnings,
+          model_parameters: pipeline.model_parameters,
+          error: pipeline.error_message,
+        }, null, 2)}</pre>
+      </details>
+    </div>
+  );
+}
+
 function RecognitionPanel({
   result,
   busy,
@@ -538,6 +608,20 @@ function assetDisplayLabel(asset: AnalysisAsset): string {
 
 function workOverlayForLabel(label: string | null): WorkOverlayState | null {
   if (!label) return null;
+  if (label.includes("Smart AI")) {
+    return {
+      title: "Smart AI grading running...",
+      subtitle: "One request is running deterministic preprocessing, Phase A notes, and Phase B final grading.",
+      steps: ["Visual and centering analysis running", "Surface and final grading running", "Final result saved"],
+    };
+  }
+  if (label.includes("preprocess")) {
+    return {
+      title: "Preprocessing images...",
+      subtitle: "OpenCV diagnostic views and centering data are being refreshed.",
+      steps: ["Boundary detection", "Diagnostic images", "Centering JSON"],
+    };
+  }
   if (label.includes("Local AI") || label.includes("Front elemzés") || label.includes("Back elemzés") || label.includes("review")) {
     return {
       title: "Local AI elemzés fut...",
@@ -604,6 +688,8 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const [localAIDryRun, setLocalAIDryRun] = useState<LocalAIDryRun | null>(null);
   const [localAIDebug, setLocalAIDebug] = useState<LocalAIDebugSingleImageResponse | null>(null);
   const [remoteAIGrade, setRemoteAIGrade] = useState<RemoteAIGradeResponse | null>(null);
+  const [processedImages, setProcessedImages] = useState<ProcessedImagesResponse | null>(null);
+  const [gradingPipeline, setGradingPipeline] = useState<AIGradingPipelineStatus | null>(null);
   const [recognitionResult, setRecognitionResult] = useState<RecognitionResponse | null>(null);
   const [report, setReport] = useState<AnalysisReport | null>(null);
   const [loading, setLoading] = useState(true);
@@ -616,6 +702,9 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const [ownedEditForm, setOwnedEditForm] = useState<OwnedEditForm>(editFormFromOwnedCard(null));
   const [previewAsset, setPreviewAsset] = useState<AnalysisAsset | CardMedia | null>(null);
   const [selectedPreviewSide, setSelectedPreviewSide] = useState<"front" | "back">("front");
+  const [selectedProcessedSide, setSelectedProcessedSide] = useState<"front" | "back">("front");
+  const [selectedProcessedVariant, setSelectedProcessedVariant] = useState("original_normalized");
+  const [boundaryEditorSide, setBoundaryEditorSide] = useState<"front" | "back" | null>(null);
   const [showCenteringEditor, setShowCenteringEditor] = useState(false);
 
   const busy = busyLabel !== null;
@@ -743,6 +832,15 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
         setOpenCvAssets([]);
       }
       try {
+        const processed = await api.getProcessedImages(ownedCardId);
+        setProcessedImages(processed);
+        const status = await api.getAIGradingStatus(ownedCardId);
+        setGradingPipeline(status);
+      } catch {
+        setProcessedImages(null);
+        setGradingPipeline(null);
+      }
+      try {
         setLatestCentering(await api.getLatestCentering(ownedCardId));
         setCenteringMeasurements(await api.getCenteringMeasurements(ownedCardId));
       } catch {
@@ -773,6 +871,11 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   const previewImage = selectedPreviewSide === "front"
     ? latestFrontImage ?? latestBackImage ?? latestUploadedImage
     : latestBackImage ?? latestFrontImage ?? latestUploadedImage;
+  const processedSides = processedImages?.sides ?? {};
+  const selectedProcessed = processedSides[selectedProcessedSide] ?? processedSides.front ?? processedSides.back ?? null;
+  const processedVariantPath = selectedProcessed?.generated_images?.[selectedProcessedVariant]
+    ?? selectedProcessed?.generated_images?.original_normalized
+    ?? null;
 
   useEffect(() => {
     if (selectedPreviewSide === "front" && !latestFrontImage && latestBackImage) {
@@ -782,6 +885,18 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
       setSelectedPreviewSide("front");
     }
   }, [latestBackImage, latestFrontImage, selectedPreviewSide]);
+
+  useEffect(() => {
+    if (selectedProcessedSide === "front" && !processedSides.front && processedSides.back) {
+      setSelectedProcessedSide("back");
+    }
+    if (selectedProcessedSide === "back" && !processedSides.back && processedSides.front) {
+      setSelectedProcessedSide("front");
+    }
+    if (selectedProcessed && !selectedProcessed.generated_images[selectedProcessedVariant]) {
+      setSelectedProcessedVariant("original_normalized");
+    }
+  }, [processedSides.back, processedSides.front, selectedProcessed, selectedProcessedSide, selectedProcessedVariant]);
 
   const groupedAssets = useMemo(() => {
     const assets = report?.assets ?? [];
@@ -1022,6 +1137,87 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
     }
   };
 
+  const refreshProcessedState = async () => {
+    try {
+      setProcessedImages(await api.getProcessedImages(ownedCardId));
+    } catch {
+      setProcessedImages(null);
+    }
+    try {
+      setGradingPipeline(await api.getAIGradingStatus(ownedCardId));
+    } catch {
+      setGradingPipeline(null);
+    }
+  };
+
+  const runSmartPreprocessing = async () => {
+    if (!hasAnalysisImage) {
+      setScopedError("analysis", "Upload at least one front or back image first.");
+      return;
+    }
+    setBusyLabel("Smart preprocess running...");
+    setNotice(null);
+    try {
+      const result = await api.runSmartPreprocessing(ownedCardId);
+      setProcessedImages(result);
+      setScopedSuccess("analysis", "OpenCV diagnostic images refreshed.");
+      setError(null);
+    } catch (err) {
+      setScopedError("analysis", err instanceof Error ? err.message : "Smart preprocessing failed");
+    } finally {
+      setBusyLabel(null);
+    }
+  };
+
+  const startSmartAIGrading = async () => {
+    if (localAIBlockedReason) {
+      setScopedError("analysis", localAIBlockedReason);
+      return;
+    }
+    setBusyLabel("Smart AI grading running...");
+    setNotice(null);
+    try {
+      const result = await api.startAIGrading(ownedCardId);
+      setGradingPipeline(result.pipeline);
+      await refreshProcessedState();
+      const runsData = await api.getAnalysisRuns(ownedCardId);
+      setAnalysisRuns(runsData);
+      if (result.analysis_run?.id) {
+        await loadReport(result.analysis_run.id);
+      }
+      setScopedSuccess("analysis", "Two-phase AI grading completed.");
+      setError(null);
+    } catch (err) {
+      setScopedError("analysis", err instanceof Error ? err.message : "Two-phase AI grading failed");
+      await refreshProcessedState();
+    } finally {
+      setBusyLabel(null);
+    }
+  };
+
+  const retrySmartPhaseB = async () => {
+    if (localAIBlockedReason) {
+      setScopedError("analysis", localAIBlockedReason);
+      return;
+    }
+    setBusyLabel("Smart AI Phase B retry...");
+    setNotice(null);
+    try {
+      const result = await api.retryAIGradingPhaseB(ownedCardId);
+      setGradingPipeline(result.pipeline);
+      if (result.pipeline.analysis_run_id) {
+        await loadReport(result.pipeline.analysis_run_id);
+      }
+      setScopedSuccess("analysis", "Phase B retry completed.");
+      setError(null);
+    } catch (err) {
+      setScopedError("analysis", err instanceof Error ? err.message : "Phase B retry failed");
+      await refreshProcessedState();
+    } finally {
+      setBusyLabel(null);
+    }
+  };
+
   const refreshScore = async () => {
     if (!latestAnalysis) return;
     setBusyLabel("Report frissítése...");
@@ -1216,6 +1412,37 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
       setError(null);
     } catch (err) {
       setScopedError("analysis", err instanceof Error ? err.message : "Centering mentési hiba");
+    } finally {
+      setBusyLabel(null);
+    }
+  };
+
+  const saveManualBoundary = async (side: "front" | "back", corners: number[][]) => {
+    setBusyLabel("Smart preprocess boundary save...");
+    setNotice(null);
+    try {
+      await api.saveManualBoundary(ownedCardId, side, corners);
+      await refreshProcessedState();
+      setBoundaryEditorSide(null);
+      setScopedSuccess("analysis", "Manual card boundary saved and centering recalculated.");
+      setError(null);
+    } catch (err) {
+      setScopedError("analysis", err instanceof Error ? err.message : "Boundary save failed");
+    } finally {
+      setBusyLabel(null);
+    }
+  };
+
+  const recalculateSmartCentering = async (side?: "front" | "back") => {
+    setBusyLabel("Smart preprocess centering recalculate...");
+    setNotice(null);
+    try {
+      const result = await api.recalculateSmartCentering(ownedCardId, side);
+      setProcessedImages(result);
+      setScopedSuccess("analysis", "Centering recalculated from final corners.");
+      setError(null);
+    } catch (err) {
+      setScopedError("analysis", err instanceof Error ? err.message : "Centering recalculation failed");
     } finally {
       setBusyLabel(null);
     }
@@ -1571,9 +1798,15 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
 
         <div className="space-y-4">
           <Panel title="Képi elemzés" subtitle="OpenCV előfeldolgozás és Local AI elemzés server-local vagy később remote worker módban.">
-            <div className="grid gap-3 md:grid-cols-3">
+            <div className="grid gap-3 md:grid-cols-4">
               <button className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-60" disabled={busy} onClick={runAnalysis} type="button">
                 <Play size={16} /> {busyLabel === "Elemzés fut..." ? "Elemzés fut..." : "OpenCV elemzés indítása"}
+              </button>
+              <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-500/40 px-3 py-2 text-sm font-medium text-blue-100 hover:bg-blue-500/10 disabled:opacity-50" disabled={busy || !hasAnalysisImage} onClick={runSmartPreprocessing} type="button">
+                <RefreshCw size={16} /> Preprocess
+              </button>
+              <button className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50" disabled={busy || Boolean(localAIBlockedReason)} onClick={startSmartAIGrading} type="button">
+                <Play size={16} /> Start AI Grading
               </button>
               <button className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50" disabled={busy || Boolean(localAIBlockedReason)} onClick={runLocalAI} type="button">
                 <Play size={16} /> Local AI elemzés
@@ -1594,7 +1827,20 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
               </div>
             )}
             <InlineNotice notice={notice} scope="analysis" />
+            <SmartGradePanel pipeline={gradingPipeline} onRetryPhaseB={retrySmartPhaseB} />
             {remoteAIGrade && <RemoteAIGradePanel response={remoteAIGrade} />}
+            <details className="mt-4 rounded-lg border border-slate-800 bg-slate-950/25 p-3" open={Boolean(processedImages && Object.keys(processedImages.sides).length)}>
+              <summary className="cursor-pointer text-sm font-medium text-slate-300">Phase 16 preprocessing/debug panel</summary>
+              <ProcessedDiagnosticsPanel
+                processed={processedImages}
+                selectedSide={selectedProcessedSide}
+                selectedVariant={selectedProcessedVariant}
+                onSelectSide={setSelectedProcessedSide}
+                onSelectVariant={setSelectedProcessedVariant}
+                onOpenBoundary={(side) => setBoundaryEditorSide(side)}
+                onRecalculate={recalculateSmartCentering}
+              />
+            </details>
             <details className="mt-4 rounded-lg border border-slate-800 bg-slate-950/25 p-3">
               <summary className="cursor-pointer text-sm font-medium text-slate-300">Fejlesztői / Debug eszközök</summary>
               <div className="mt-3 grid gap-2 md:grid-cols-2">
@@ -1855,6 +2101,15 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
           busy={busy}
           onCancel={() => setShowCenteringEditor(false)}
           onSave={saveCenteringMeasurement}
+        />
+      )}
+
+      {boundaryEditorSide && processedImages?.sides?.[boundaryEditorSide] && (
+        <BoundaryEditor
+          side={processedImages.sides[boundaryEditorSide]}
+          busy={busy}
+          onCancel={() => setBoundaryEditorSide(null)}
+          onSave={(corners) => saveManualBoundary(boundaryEditorSide, corners)}
         />
       )}
 
@@ -2430,6 +2685,169 @@ function CenteringResultCard({ side, result }: { side: "front" | "back"; result:
         <CenteringRatioBar label="T/B" first={result.vertical.first} second={result.vertical.second} />
       </div>
       <div className="mt-3 text-xs text-cyan-200">{result.shiftX} · {result.shiftY}</div>
+    </div>
+  );
+}
+
+function ProcessedDiagnosticsPanel({
+  processed,
+  selectedSide,
+  selectedVariant,
+  onSelectSide,
+  onSelectVariant,
+  onOpenBoundary,
+  onRecalculate,
+}: {
+  processed: ProcessedImagesResponse | null;
+  selectedSide: "front" | "back";
+  selectedVariant: string;
+  onSelectSide: (side: "front" | "back") => void;
+  onSelectVariant: (variant: string) => void;
+  onOpenBoundary: (side: "front" | "back") => void;
+  onRecalculate: (side: "front" | "back") => void;
+}) {
+  const sides = processed?.sides ?? {};
+  const side = sides[selectedSide] ?? sides.front ?? sides.back ?? null;
+  const imagePath = side?.generated_images?.[selectedVariant] ?? side?.generated_images?.original_normalized;
+  if (!processed || Object.keys(sides).length === 0) {
+    return <EmptyState label="No Phase 16 processed images yet." />;
+  }
+  return (
+    <div className="mt-4 space-y-4">
+      <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex rounded-lg border border-slate-800 bg-slate-950/35 p-1">
+          {(["front", "back"] as const).map((item) => (
+            <button
+              key={item}
+              className={`rounded-md px-3 py-1.5 text-sm ${selectedSide === item ? "bg-blue-600 text-white" : "text-slate-300 hover:bg-slate-800/70"} disabled:opacity-40`}
+              disabled={!sides[item]}
+              onClick={() => onSelectSide(item)}
+              type="button"
+            >
+              {item}
+            </button>
+          ))}
+        </div>
+        {side && (
+          <div className="flex flex-wrap gap-2">
+            <button className="rounded-lg border border-cyan-500/40 px-3 py-2 text-sm text-cyan-100 hover:bg-cyan-500/10" onClick={() => onOpenBoundary(side.side as "front" | "back")} type="button">Adjust corners</button>
+            <button className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800" onClick={() => onRecalculate(side.side as "front" | "back")} type="button">Recalculate</button>
+          </div>
+        )}
+      </div>
+      <div className="flex flex-wrap gap-2">
+        {processedVariantOptions.map(([key, label]) => (
+          <button
+            key={key}
+            className={`rounded-lg border px-3 py-1.5 text-xs ${selectedVariant === key ? "border-blue-500 bg-blue-500/15 text-blue-100" : "border-slate-800 text-slate-300 hover:bg-slate-800/60"} disabled:opacity-35`}
+            disabled={!side?.generated_images?.[key]}
+            onClick={() => onSelectVariant(key)}
+            type="button"
+          >
+            {label}
+          </button>
+        ))}
+      </div>
+      {imagePath ? (
+        <img className="max-h-[520px] w-full rounded-lg border border-slate-800 object-contain bg-slate-950" src={mediaUrl(imagePath, side?.updated_at)} alt={selectedVariant} />
+      ) : (
+        <EmptyState label="Selected diagnostic image is not available." />
+      )}
+      {side && (
+        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+          <StatCard label="Boundary" value={`${side.card_boundary?.boundary_source ?? "-"} ${side.card_boundary?.confidence ?? "-"}`} />
+          <StatCard label="H ratio" value={side.centering?.horizontal_ratio ?? "-"} />
+          <StatCard label="V ratio" value={side.centering?.vertical_ratio ?? "-"} />
+          <StatCard label="Center conf" value={side.centering?.confidence !== undefined ? formatNumber(side.centering.confidence, 2) : "-"} />
+        </div>
+      )}
+      {side?.warnings?.length ? (
+        <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-xs text-amber-100">
+          {side.warnings.map((warning) => <div key={warning}>{warning}</div>)}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function BoundaryEditor({
+  side,
+  busy,
+  onCancel,
+  onSave,
+}: {
+  side: ProcessedSide;
+  busy: boolean;
+  onCancel: () => void;
+  onSave: (corners: number[][]) => void;
+}) {
+  const imagePath = side.generated_images.original_normalized;
+  const boundary = side.card_boundary ?? {};
+  const [natural, setNatural] = useState({ width: 0, height: 0 });
+  const [corners, setCorners] = useState<number[][]>(() => boundary.manual_corners?.length === 4 ? boundary.manual_corners : boundary.final_corners?.length === 4 ? boundary.final_corners : boundary.auto_corners ?? []);
+  const [dragIndex, setDragIndex] = useState<number | null>(null);
+
+  const fallback = (width: number, height: number) => [[0, 0], [width - 1, 0], [width - 1, height - 1], [0, height - 1]];
+  const initialize = (width: number, height: number) => {
+    setNatural({ width, height });
+    setCorners((current) => current.length === 4 ? current : fallback(width, height));
+  };
+  const updateCorner = (event: PointerEvent<SVGSVGElement>) => {
+    if (dragIndex === null || natural.width <= 0 || natural.height <= 0) return;
+    const rect = event.currentTarget.getBoundingClientRect();
+    const x = Math.max(0, Math.min(natural.width, ((event.clientX - rect.left) / rect.width) * natural.width));
+    const y = Math.max(0, Math.min(natural.height, ((event.clientY - rect.top) / rect.height) * natural.height));
+    setCorners((current) => current.map((point, index) => index === dragIndex ? [Math.round(x * 100) / 100, Math.round(y * 100) / 100] : point));
+  };
+  const resetAuto = () => {
+    if (boundary.auto_corners?.length === 4) {
+      setCorners(boundary.auto_corners);
+    } else if (natural.width && natural.height) {
+      setCorners(fallback(natural.width, natural.height));
+    }
+  };
+
+  return (
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4 backdrop-blur-sm">
+      <div className="max-h-[94vh] w-full max-w-6xl overflow-auto rounded-xl border border-slate-700 bg-charcoal-900/95 p-4 shadow-2xl shadow-black/50">
+        <div className="mb-4 flex flex-wrap items-center justify-between gap-3">
+          <div>
+            <h2 className="text-lg font-semibold text-slate-100">Card boundary: {side.side}</h2>
+            <p className="mt-1 text-sm text-slate-400">Drag the four corners, then save. Coordinates are stored beside the auto-detected corners.</p>
+          </div>
+          <button className="rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800" onClick={onCancel} type="button"><X size={16} /></button>
+        </div>
+        {!imagePath ? (
+          <EmptyState label="Original normalized image is missing." />
+        ) : (
+          <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
+            <div className="relative mx-auto max-h-[78vh] max-w-full overflow-hidden rounded-lg border border-slate-800 bg-slate-950">
+              <img className="block max-h-[78vh] w-auto max-w-full select-none" src={mediaUrl(imagePath, side.updated_at)} alt={`${side.side} boundary`} onLoad={(event) => initialize(event.currentTarget.naturalWidth, event.currentTarget.naturalHeight)} draggable={false} />
+              {corners.length === 4 && natural.width > 0 && natural.height > 0 && (
+                <svg className="absolute inset-0 h-full w-full touch-none" viewBox={`0 0 ${natural.width} ${natural.height}`} preserveAspectRatio="none" onPointerMove={updateCorner} onPointerUp={() => setDragIndex(null)} onPointerLeave={() => setDragIndex(null)}>
+                  <polygon points={corners.map((point) => point.join(",")).join(" ")} fill="rgba(56,189,248,0.12)" stroke="#38bdf8" strokeWidth={4} />
+                  {corners.map((point, index) => (
+                    <g key={index}>
+                      <circle cx={point[0]} cy={point[1]} r={18} fill="black" fillOpacity={0.75} />
+                      <circle className="cursor-grab" cx={point[0]} cy={point[1]} r={13} fill="#fbbf24" stroke="white" strokeWidth={2} onPointerDown={(event) => { event.preventDefault(); setDragIndex(index); }} />
+                    </g>
+                  ))}
+                </svg>
+              )}
+            </div>
+            <div className="space-y-3">
+              <div className="rounded-lg border border-slate-800 bg-slate-950/35 p-3 text-sm text-slate-300">
+                <div>Source: {boundary.boundary_source ?? "-"}</div>
+                <div>Confidence: {boundary.confidence ?? "-"}</div>
+              </div>
+              <button className="w-full rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800" onClick={resetAuto} type="button"><RotateCcw size={16} className="mr-2 inline" />Reset to auto</button>
+              <button className="w-full rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-60" disabled={busy || corners.length !== 4} onClick={() => onSave(corners)} type="button"><Save size={16} className="mr-2 inline" />Save boundary</button>
+              <button className="w-full rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-300 hover:bg-slate-800" onClick={onCancel} type="button">Cancel</button>
+              <pre className="max-h-56 overflow-auto rounded bg-slate-950/70 p-3 text-xs text-slate-400">{JSON.stringify(corners, null, 2)}</pre>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

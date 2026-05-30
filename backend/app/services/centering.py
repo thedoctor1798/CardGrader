@@ -1,3 +1,5 @@
+import cv2
+import numpy as np
 from fastapi import HTTPException
 from sqlmodel import Session, select
 
@@ -135,3 +137,275 @@ def latest_manual_centering(session: Session, owned_card_id: int) -> CenteringMe
         .where(CenteringMeasurement.source == "manual")
         .order_by(CenteringMeasurement.created_at.desc(), CenteringMeasurement.id.desc())
     ).first()
+
+
+STANDARD_CARD_WIDTH = 1000
+STANDARD_CARD_HEIGHT = 1400
+STANDARD_CARD_RATIO = STANDARD_CARD_WIDTH / STANDARD_CARD_HEIGHT
+MIN_CARD_AREA_RATIO = 0.18
+CARD_RATIO_TOLERANCE = 0.22
+
+
+def order_corners(points: np.ndarray | list[list[float]]) -> list[list[float]]:
+    pts = np.asarray(points, dtype="float32").reshape(4, 2)
+    sums = pts.sum(axis=1)
+    diffs = np.diff(pts, axis=1).reshape(4)
+    ordered = np.zeros((4, 2), dtype="float32")
+    ordered[0] = pts[np.argmin(sums)]
+    ordered[2] = pts[np.argmax(sums)]
+    ordered[1] = pts[np.argmin(diffs)]
+    ordered[3] = pts[np.argmax(diffs)]
+    return [[round(float(x), 2), round(float(y), 2)] for x, y in ordered]
+
+
+def fallback_corners(width: int, height: int) -> list[list[float]]:
+    return [
+        [0.0, 0.0],
+        [float(max(0, width - 1)), 0.0],
+        [float(max(0, width - 1)), float(max(0, height - 1))],
+        [0.0, float(max(0, height - 1))],
+    ]
+
+
+def _quad_dimensions(corners: list[list[float]]) -> tuple[float, float]:
+    pts = np.asarray(corners, dtype="float32")
+    tl, tr, br, bl = pts
+    width_top = float(np.linalg.norm(tr - tl))
+    width_bottom = float(np.linalg.norm(br - bl))
+    height_left = float(np.linalg.norm(bl - tl))
+    height_right = float(np.linalg.norm(br - tr))
+    return max(width_top, width_bottom), max(height_left, height_right)
+
+
+def _boundary_confidence(
+    corners: list[list[float]],
+    contour_area: float,
+    image_width: int,
+    image_height: int,
+    rectangular: bool,
+) -> float:
+    quad_width, quad_height = _quad_dimensions(corners)
+    if quad_width <= 0 or quad_height <= 0:
+        return 0.0
+    area_ratio = min(1.0, contour_area / max(1.0, image_width * image_height))
+    observed_ratio = min(quad_width, quad_height) / max(quad_width, quad_height)
+    expected_ratio = min(STANDARD_CARD_RATIO, 1 / STANDARD_CARD_RATIO)
+    ratio_penalty = min(1.0, abs(observed_ratio - expected_ratio) / CARD_RATIO_TOLERANCE)
+    confidence = 0.35 + (area_ratio * 0.45) + (0.2 if rectangular else 0.05) - (ratio_penalty * 0.35)
+    return round(max(0.0, min(0.99, confidence)), 2)
+
+
+def _plausible_card_corners(corners: list[list[float]], contour_area: float, image_width: int, image_height: int) -> bool:
+    if contour_area < image_width * image_height * MIN_CARD_AREA_RATIO:
+        return False
+    quad_width, quad_height = _quad_dimensions(corners)
+    if quad_width <= 0 or quad_height <= 0:
+        return False
+    observed_ratio = min(quad_width, quad_height) / max(quad_width, quad_height)
+    expected_ratio = min(STANDARD_CARD_RATIO, 1 / STANDARD_CARD_RATIO)
+    return abs(observed_ratio - expected_ratio) <= CARD_RATIO_TOLERANCE
+
+
+def detect_card_boundary(image: np.ndarray) -> dict:
+    warnings: list[str] = []
+    if image is None or image.size == 0:
+        return {"detected": False, "confidence": 0.0, "auto_corners": [], "warnings": ["empty image"]}
+
+    height, width = image.shape[:2]
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    edges = cv2.Canny(blurred, 40, 140)
+    kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (5, 5))
+    closed = cv2.morphologyEx(edges, cv2.MORPH_CLOSE, kernel, iterations=2)
+    contours, _ = cv2.findContours(closed, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+    if not contours:
+        return {"detected": False, "confidence": 0.0, "auto_corners": [], "warnings": ["no external contours found"]}
+
+    best: tuple[list[list[float]], float, bool] | None = None
+    for contour in sorted(contours, key=cv2.contourArea, reverse=True)[:16]:
+        area = float(cv2.contourArea(contour))
+        if area < width * height * MIN_CARD_AREA_RATIO:
+            continue
+        perimeter = cv2.arcLength(contour, True)
+        for epsilon in (0.015, 0.025, 0.035, 0.05, 0.07):
+            approx = cv2.approxPolyDP(contour, epsilon * perimeter, True)
+            if len(approx) != 4:
+                continue
+            corners = order_corners(approx)
+            if _plausible_card_corners(corners, area, width, height):
+                best = (corners, area, True)
+                break
+        if best is not None:
+            break
+
+    if best is None:
+        for contour in sorted(contours, key=cv2.contourArea, reverse=True)[:8]:
+            area = float(cv2.contourArea(contour))
+            rect = cv2.minAreaRect(contour)
+            corners = order_corners(cv2.boxPoints(rect))
+            if _plausible_card_corners(corners, area, width, height):
+                best = (corners, area, False)
+                warnings.append("used minimum area rectangle fallback")
+                break
+
+    if best is None:
+        return {
+            "detected": False,
+            "confidence": 0.0,
+            "auto_corners": [],
+            "warnings": ["no plausible trading-card rectangle found"],
+        }
+
+    corners, area, rectangular = best
+    return {
+        "detected": True,
+        "confidence": _boundary_confidence(corners, area, width, height, rectangular),
+        "auto_corners": corners,
+        "warnings": warnings,
+    }
+
+
+def warp_card_to_standard(
+    image: np.ndarray,
+    corners: list[list[float]],
+    width: int = STANDARD_CARD_WIDTH,
+    height: int = STANDARD_CARD_HEIGHT,
+) -> np.ndarray:
+    source = np.asarray(order_corners(corners), dtype="float32")
+    target = np.array(
+        [
+            [0, 0],
+            [width - 1, 0],
+            [width - 1, height - 1],
+            [0, height - 1],
+        ],
+        dtype="float32",
+    )
+    matrix = cv2.getPerspectiveTransform(source, target)
+    return cv2.warpPerspective(image, matrix, (width, height))
+
+
+def _edge_position(projection: np.ndarray, start: int, stop: int) -> tuple[int, float]:
+    start = max(0, min(len(projection) - 1, start))
+    stop = max(start + 1, min(len(projection), stop))
+    window = projection[start:stop]
+    if window.size == 0:
+        return start, 0.0
+    index = int(np.argmax(window)) + start
+    score = float(window[index - start])
+    return index, score
+
+
+def _inner_border_edges(image: np.ndarray) -> tuple[int, int, int, int, float, list[str]]:
+    warnings: list[str] = []
+    height, width = image.shape[:2]
+    gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
+    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8)).apply(gray)
+    blurred = cv2.GaussianBlur(clahe, (5, 5), 0)
+    edges = cv2.Canny(blurred, 45, 145)
+    y0, y1 = int(height * 0.08), int(height * 0.92)
+    x0, x1 = int(width * 0.08), int(width * 0.92)
+    vertical_projection = edges[y0:y1, :].sum(axis=0).astype("float32")
+    horizontal_projection = edges[:, x0:x1].sum(axis=1).astype("float32")
+
+    left, left_score = _edge_position(vertical_projection, int(width * 0.04), int(width * 0.32))
+    right, right_score = _edge_position(vertical_projection, int(width * 0.68), int(width * 0.96))
+    top, top_score = _edge_position(horizontal_projection, int(height * 0.04), int(height * 0.32))
+    bottom, bottom_score = _edge_position(horizontal_projection, int(height * 0.68), int(height * 0.96))
+
+    expected_left = int(width * 0.08)
+    expected_right = int(width * 0.92)
+    expected_top = int(height * 0.08)
+    expected_bottom = int(height * 0.92)
+    score_values = [left_score, right_score, top_score, bottom_score]
+    median_score = float(np.median(score_values)) if score_values else 0.0
+    confidence = min(0.9, median_score / max(1.0, height * 255 * 0.018))
+
+    if right <= left or bottom <= top or confidence < 0.18:
+        warnings.append("inner border edge confidence low; used conservative fallback guides")
+        left, right, top, bottom = expected_left, expected_right, expected_top, expected_bottom
+        confidence = 0.18
+
+    return left, right, top, bottom, round(float(confidence), 2), warnings
+
+
+def calculate_centering_from_warped_card(image: np.ndarray) -> dict:
+    if image is None or image.size == 0:
+        return {
+            "detected": False,
+            "confidence": 0.0,
+            "warnings": ["empty perspective corrected image"],
+        }
+
+    height, width = image.shape[:2]
+    left, right, top, bottom, confidence, warnings = _inner_border_edges(image)
+    left_border = max(0, left)
+    right_border = max(0, width - 1 - right)
+    top_border = max(0, top)
+    bottom_border = max(0, height - 1 - bottom)
+
+    try:
+        horizontal_left, horizontal_right, _ = ratio_parts(left_border, right_border)
+        vertical_top, vertical_bottom, _ = ratio_parts(top_border, bottom_border)
+    except HTTPException:
+        return {
+            "detected": False,
+            "confidence": 0.0,
+            "warnings": [*warnings, "could not calculate centering ratios"],
+        }
+
+    return {
+        "detected": True,
+        "confidence": confidence,
+        "left_border_px": round(float(left_border), 2),
+        "right_border_px": round(float(right_border), 2),
+        "top_border_px": round(float(top_border), 2),
+        "bottom_border_px": round(float(bottom_border), 2),
+        "horizontal_ratio": ratio_label(horizontal_left, horizontal_right),
+        "vertical_ratio": ratio_label(vertical_top, vertical_bottom),
+        "horizontal_percent_left": horizontal_left,
+        "horizontal_percent_right": horizontal_right,
+        "vertical_percent_top": vertical_top,
+        "vertical_percent_bottom": vertical_bottom,
+        "inner_left_px": int(left),
+        "inner_right_px": int(right),
+        "inner_top_px": int(top),
+        "inner_bottom_px": int(bottom),
+        "warnings": warnings,
+    }
+
+
+def draw_centering_debug(
+    perspective_image: np.ndarray,
+    centering: dict,
+    boundary: dict,
+) -> np.ndarray:
+    debug = perspective_image.copy()
+    height, width = debug.shape[:2]
+    cv2.rectangle(debug, (0, 0), (width - 1, height - 1), (0, 255, 0), 4)
+    for point in [(0, 0), (width - 1, 0), (width - 1, height - 1), (0, height - 1)]:
+        cv2.circle(debug, point, 12, (0, 180, 255), -1)
+
+    if centering.get("detected"):
+        left = int(centering.get("inner_left_px", 0))
+        right = int(centering.get("inner_right_px", width - 1))
+        top = int(centering.get("inner_top_px", 0))
+        bottom = int(centering.get("inner_bottom_px", height - 1))
+        cv2.line(debug, (left, 0), (left, height), (255, 120, 0), 3)
+        cv2.line(debug, (right, 0), (right, height), (255, 120, 0), 3)
+        cv2.line(debug, (0, top), (width, top), (255, 120, 0), 3)
+        cv2.line(debug, (0, bottom), (width, bottom), (255, 120, 0), 3)
+        cv2.rectangle(debug, (left, top), (right, bottom), (255, 200, 0), 2)
+
+    lines = [
+        f"boundary: {boundary.get('boundary_source', 'auto')} conf={boundary.get('confidence', 0)}",
+        f"H: {centering.get('horizontal_ratio', 'n/a')}  L={centering.get('left_border_px', '-')} R={centering.get('right_border_px', '-')}",
+        f"V: {centering.get('vertical_ratio', 'n/a')}  T={centering.get('top_border_px', '-')} B={centering.get('bottom_border_px', '-')}",
+        f"centering conf={centering.get('confidence', 0)}",
+    ]
+    y = 42
+    for line in lines:
+        cv2.putText(debug, line, (24, y), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (0, 0, 0), 5)
+        cv2.putText(debug, line, (24, y), cv2.FONT_HERSHEY_SIMPLEX, 0.9, (255, 255, 255), 2)
+        y += 42
+    return debug

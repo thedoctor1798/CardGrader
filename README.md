@@ -960,3 +960,82 @@ Then start the frontend again:
 ```powershell
 .\start_frontend.bat
 ```
+
+## Phase 16 Smart Preprocessing And Two-Phase AI Grading
+
+Phase 16 adds optional OpenCV preprocessing and a two-phase AI grading pipeline. It is feature-flagged so the legacy upload, OpenCV, and Local AI flows remain available.
+
+### Feature Flags
+
+Set these in `backend/.env`, the project root `.env`, or your Docker environment:
+
+```env
+ENABLE_IMAGE_PREPROCESSING=true
+ENABLE_CENTERING_DETECTION=true
+ENABLE_MANUAL_CENTERING_CORRECTION=true
+ENABLE_TWO_PHASE_AI_GRADING=true
+SEND_DIAGNOSTIC_IMAGES_TO_AI=true
+
+AI_MAX_CONTEXT_TOKENS=10000
+AI_PHASE_A_MAX_OUTPUT_TOKENS=1500
+AI_PHASE_B_MAX_OUTPUT_TOKENS=2500
+```
+
+If a provider cannot use the requested token values, CardGrader logs a warning and uses the safest lower configured value instead of failing grading only for that reason.
+
+### Diagnostic Images
+
+When preprocessing is enabled, uploaded front/back card images generate files under:
+
+```text
+media/processed/<owned_card_id>/<side>/
+```
+
+Each side can include:
+
+- `original_normalized.jpg`: EXIF-corrected, resized original for AI/reference.
+- `grayscale_clahe.jpg`: grayscale local contrast view for text, borders, and faint defects.
+- `sobel_edges.jpg`: line/edge emphasis for scratches, whitening, and print lines.
+- `emboss_surface.jpg`: embossed grayscale surface view for dents, impressions, and texture.
+- `highpass_texture.jpg`: high-frequency detail view for fine scratches and irregularities.
+- `canny_edges.jpg`: contour/debug edge map for boundary detection.
+- `perspective_corrected.jpg`: card crop warped from final corners.
+- `centering_debug.jpg`: overlay of final centering guides, ratios, confidence, and boundary source.
+- `analysis.json`: structured preprocessing, boundary, centering, paths, timings, and warnings.
+
+The original upload is never overwritten. If preprocessing fails, the error is logged, `analysis.json` stores a warning, and normal grading can continue with the original images.
+
+### Boundary And Manual Correction
+
+Automatic boundary detection uses OpenCV grayscale blur, Canny edges, external contours, rectangular approximation, trading-card aspect ratio checks, and confidence scoring. The frontend Phase 16 panel lets you open a corner editor for each processed side. Drag the four corner points to correct the detected boundary, then save. CardGrader stores both auto and manual corners and uses `final_corners` for perspective correction and centering.
+
+If detection fails, the system marks the boundary as `fallback` and uses the full normalized image so the flow does not block. Manual correction can still be saved when enabled.
+
+### Deterministic Centering
+
+Centering is calculated from `perspective_corrected.jpg` first. OpenCV finds likely inner border guides from edge projections and stores left/right/top/bottom border widths, horizontal and vertical ratios, side percentages, confidence, and warnings. AI may comment on centering, but the OpenCV JSON is the primary source.
+
+### Two-Phase AI Grading
+
+The card detail page includes one `Start AI Grading` button. Internally:
+
+1. Phase A receives original color images, normalized originals, deterministic centering JSON, final boundary data, and card metadata. It returns internal working notes only.
+2. Phase B receives Phase A notes, deterministic centering JSON, original images, and diagnostic views when `SEND_DIAGNOSTIC_IMAGES_TO_AI=true`. It returns the final user-facing JSON grade estimate.
+
+Phase B can be retried without rerunning Phase A. Developer details in the panel expose Phase A notes, model parameters, warnings, and raw stored JSON.
+
+The Windows AI worker now also exposes:
+
+```text
+POST /api/ai/vision-json
+```
+
+Use the updated worker for Phase 16 remote-worker grading. The older `/api/ai/grade` endpoint remains for the legacy flow.
+
+### Phase 16 Troubleshooting
+
+- Bad contour detection: use the corner editor and save manual corners. Try a clearer full-card image with visible card edges.
+- Blurry images: retake the photo; OpenCV centering and AI defect confidence both drop when edges are soft.
+- Reflective holo cards: diagnostic images can exaggerate reflections. Confirm severe findings against the original color image.
+- Processed images exaggerate defects: emboss, high-pass, and Sobel are discovery aids, not proof. Phase B is prompted to confirm important defects when possible.
+- Token/context limits: lower `AI_PHASE_A_MAX_OUTPUT_TOKENS` or `AI_PHASE_B_MAX_OUTPUT_TOKENS`, or raise your local worker/server max token config if the model truncates JSON.

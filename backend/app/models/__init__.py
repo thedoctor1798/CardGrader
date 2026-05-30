@@ -3,6 +3,7 @@ from .core import (
     AnalysisAsset,
     AnalysisFinding,
     AnalysisRun,
+    AIGradingPipelineRun,
     Card,
     CardMedia,
     CenteringMeasurement,
@@ -13,6 +14,7 @@ from .core import (
     PriceHistory,
     PriceObservation,
     PriceProviderSetting,
+    ProcessedCardImage,
     RecognitionAttempt,
     RecognitionCandidate,
 )
@@ -21,6 +23,7 @@ __all__ = [
     "AnalysisAsset",
     "AnalysisFinding",
     "AnalysisRun",
+    "AIGradingPipelineRun",
     "Card",
     "CardMedia",
     "CenteringMeasurement",
@@ -31,6 +34,7 @@ __all__ = [
     "PriceHistory",
     "PriceObservation",
     "PriceProviderSetting",
+    "ProcessedCardImage",
     "RecognitionAttempt",
     "RecognitionCandidate",
 ]

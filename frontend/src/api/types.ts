@@ -797,3 +797,116 @@ export type AnnotationResponse = {
   message: string;
   assets: AnalysisAsset[];
 };
+
+export type CardBoundary = {
+  detected?: boolean;
+  boundary_source?: "auto" | "manual" | "fallback" | string;
+  confidence?: number;
+  auto_corners?: number[][];
+  manual_corners?: number[][];
+  final_corners?: number[][];
+};
+
+export type ProcessedCentering = {
+  detected?: boolean;
+  confidence?: number;
+  left_border_px?: number;
+  right_border_px?: number;
+  top_border_px?: number;
+  bottom_border_px?: number;
+  horizontal_ratio?: string;
+  vertical_ratio?: string;
+  horizontal_percent_left?: number;
+  horizontal_percent_right?: number;
+  vertical_percent_top?: number;
+  vertical_percent_bottom?: number;
+  warnings?: string[];
+};
+
+export type ProcessedSide = {
+  id?: number;
+  side: "front" | "back" | string;
+  status: string;
+  preprocessing_version?: string;
+  analysis_json_path?: string | null;
+  analysis?: Record<string, unknown>;
+  generated_images: Record<string, string>;
+  warnings: string[];
+  card_boundary: CardBoundary;
+  centering: ProcessedCentering;
+  updated_at?: string;
+  completed_at?: string | null;
+};
+
+export type ProcessedImagesResponse = {
+  ok: boolean;
+  owned_card_id: number;
+  enabled: boolean;
+  sides: Record<string, ProcessedSide>;
+};
+
+export type PhaseAFinding = {
+  phase?: string;
+  status?: string;
+  working_notes?: string;
+  centering_interpretation?: string;
+  visible_corner_notes?: string;
+  visible_edge_notes?: string;
+  obvious_surface_or_print_notes?: string;
+  image_limitations?: string[];
+  detected_risks?: string[];
+  recommended_phase_b_focus?: string[];
+  images_sent?: string[];
+};
+
+export type FinalGradingResult = {
+  estimated_grade?: string;
+  grade_range?: string;
+  confidence?: number;
+  subgrades?: {
+    centering?: string;
+    corners?: string;
+    edges?: string;
+    surface?: string;
+  };
+  surface_notes?: string;
+  corner_notes?: string;
+  edge_notes?: string;
+  centering_notes?: string;
+  risk_flags?: string[];
+  reasoning_summary?: string;
+  recommended_action?: string;
+  photo_retake_suggestions?: string[];
+  images_sent?: string[];
+};
+
+export type AIGradingPipelineStatus = {
+  ok: boolean;
+  id?: number;
+  owned_card_id?: number;
+  analysis_run_id?: number | null;
+  status: string;
+  phase_a_status?: string | null;
+  phase_b_status?: string | null;
+  phase_a_result?: PhaseAFinding | null;
+  phase_b_result?: FinalGradingResult | null;
+  final_result?: FinalGradingResult | null;
+  preprocessing_snapshot?: Record<string, unknown> | null;
+  model_parameters?: Record<string, unknown> | null;
+  warnings?: string[];
+  error_message?: string | null;
+  created_at?: string;
+  updated_at?: string;
+  completed_at?: string | null;
+};
+
+export type AIGradingStartResponse = {
+  ok: boolean;
+  status: string;
+  analysis_run?: AnalysisRun;
+  pipeline: AIGradingPipelineStatus;
+  phase_a?: PhaseAFinding;
+  final_result?: FinalGradingResult;
+  warnings?: string[];
+  image_payload?: AnalysisImagePayload[];
+};

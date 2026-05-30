@@ -3,6 +3,7 @@ uvicorn[standard]>=0.22
 sqlmodel>=0.0.8
 sqlalchemy>=2.0
 pillow>=10.0
-opencv-python>=4.7
+opencv-python-headless>=4.7
+numpy>=1.24
 python-multipart
 python-dotenv
