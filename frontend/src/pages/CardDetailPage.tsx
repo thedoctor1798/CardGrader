@@ -27,6 +27,7 @@ import type {
   RemoteAIWorkerResult,
   RecognitionResponse,
 } from "../api/types";
+import { AIGradingModal } from "../components/AIGradingModal";
 import { EmptyState } from "../components/EmptyState";
 import { GlobalLoadingOverlay } from "../components/GlobalLoadingOverlay";
 import { LoadingState } from "../components/LoadingState";
@@ -720,9 +721,12 @@ export function CardDetailPage({ ownedCardId, debugMode, onDeleted }: CardDetail
   const [boundaryEditorSide, setBoundaryEditorSide] = useState<"front" | "back" | null>(null);
   const [showCenteringEditor, setShowCenteringEditor] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
+  const [aiGradingModalOpen, setAIGradingModalOpen] = useState(false);
+  const [aiGradingModalError, setAIGradingModalError] = useState<string | null>(null);
 
   const busy = busyLabel !== null;
   const workOverlay = workOverlayForLabel(busyLabel);
+  const genericWorkOverlay = busyLabel?.includes("Smart AI") ? null : workOverlay;
   const latestAnalysis = analysisRuns[0] ?? null;
   const visibleFindings = report?.findings?.length ? report.findings : findings;
   const hasAnalysisImage = media.some((item) => item.media_type === "image" && sideFromLabel(item.label) !== null);
@@ -1164,6 +1168,16 @@ export function CardDetailPage({ ownedCardId, debugMode, onDeleted }: CardDetail
     }
   };
 
+  const pollAIGradingStatus = async () => {
+    try {
+      const status = await api.getAIGradingStatus(ownedCardId);
+      setGradingPipeline(status);
+      return status;
+    } catch {
+      return null;
+    }
+  };
+
   const runSmartPreprocessing = async () => {
     if (!hasAnalysisImage) {
       setScopedError("analysis", "Upload at least one front or back image first.");
@@ -1189,8 +1203,14 @@ export function CardDetailPage({ ownedCardId, debugMode, onDeleted }: CardDetail
       return;
     }
     setBusyLabel("Smart AI grading running...");
+    setAIGradingModalOpen(true);
+    setAIGradingModalError(null);
     setNotice(null);
+    const timer = window.setInterval(() => {
+      void pollAIGradingStatus();
+    }, 1200);
     try {
+      await pollAIGradingStatus();
       const result = await api.startAIGrading(ownedCardId);
       setGradingPipeline(result.pipeline);
       await refreshProcessedState();
@@ -1201,10 +1221,14 @@ export function CardDetailPage({ ownedCardId, debugMode, onDeleted }: CardDetail
       }
       setScopedSuccess("analysis", "Two-phase AI grading completed.");
       setError(null);
+      window.setTimeout(() => setAIGradingModalOpen(false), 2200);
     } catch (err) {
-      setScopedError("analysis", err instanceof Error ? err.message : "Two-phase AI grading failed");
+      const message = err instanceof Error ? err.message : "Two-phase AI grading failed";
+      setAIGradingModalError(message);
+      setScopedError("analysis", message);
       await refreshProcessedState();
     } finally {
+      window.clearInterval(timer);
       setBusyLabel(null);
     }
   };
@@ -1215,8 +1239,14 @@ export function CardDetailPage({ ownedCardId, debugMode, onDeleted }: CardDetail
       return;
     }
     setBusyLabel("Smart AI Phase B retry...");
+    setAIGradingModalOpen(true);
+    setAIGradingModalError(null);
     setNotice(null);
+    const timer = window.setInterval(() => {
+      void pollAIGradingStatus();
+    }, 1200);
     try {
+      await pollAIGradingStatus();
       const result = await api.retryAIGradingPhaseB(ownedCardId);
       setGradingPipeline(result.pipeline);
       if (result.pipeline.analysis_run_id) {
@@ -1224,10 +1254,14 @@ export function CardDetailPage({ ownedCardId, debugMode, onDeleted }: CardDetail
       }
       setScopedSuccess("analysis", "Phase B retry completed.");
       setError(null);
+      window.setTimeout(() => setAIGradingModalOpen(false), 2200);
     } catch (err) {
-      setScopedError("analysis", err instanceof Error ? err.message : "Phase B retry failed");
+      const message = err instanceof Error ? err.message : "Phase B retry failed";
+      setAIGradingModalError(message);
+      setScopedError("analysis", message);
       await refreshProcessedState();
     } finally {
+      window.clearInterval(timer);
       setBusyLabel(null);
     }
   };
@@ -2220,7 +2254,16 @@ export function CardDetailPage({ ownedCardId, debugMode, onDeleted }: CardDetail
         />
       )}
 
-      {workOverlay && <GlobalLoadingOverlay title={workOverlay.title} subtitle={workOverlay.subtitle} steps={workOverlay.steps} />}
+      <AIGradingModal
+        open={aiGradingModalOpen}
+        pipeline={gradingPipeline}
+        error={aiGradingModalError}
+        debugMode={debugMode}
+        isRunning={busyLabel?.includes("Smart AI") ?? false}
+        onRetry={startSmartAIGrading}
+        onClose={() => setAIGradingModalOpen(false)}
+      />
+      {genericWorkOverlay && <GlobalLoadingOverlay title={genericWorkOverlay.title} subtitle={genericWorkOverlay.subtitle} steps={genericWorkOverlay.steps} />}
 
       {previewAsset && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" onClick={() => setPreviewAsset(null)}>

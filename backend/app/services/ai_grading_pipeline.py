@@ -823,9 +823,69 @@ def retry_phase_b(session: Session, owned_card_id: int) -> dict[str, Any]:
     }
 
 
+def pipeline_progress_payload(pipeline: AIGradingPipelineRun | None) -> dict[str, Any]:
+    if pipeline is None:
+        return {
+            "phase": "idle",
+            "step": "not_started",
+            "progress": 0,
+            "status_label": "not_started",
+        }
+    if pipeline.status == "completed":
+        return {
+            "phase": "completed",
+            "step": "completed",
+            "progress": 100,
+            "status_label": "completed",
+        }
+    if pipeline.status in {"failed", "phase_b_failed"}:
+        return {
+            "phase": "error",
+            "step": "failed",
+            "progress": 100 if pipeline.final_result_json else 72 if pipeline.phase_a_result_json else 34,
+            "status_label": "failed",
+        }
+    if pipeline.phase_a_status == "running":
+        return {
+            "phase": "phase_a",
+            "step": "visual_condition",
+            "progress": 37,
+            "status_label": "phase A running",
+        }
+    if pipeline.phase_a_status == "completed" and pipeline.phase_b_status == "running":
+        return {
+            "phase": "phase_b",
+            "step": "defect_analysis",
+            "progress": 74,
+            "status_label": "phase B running",
+        }
+    if pipeline.phase_a_status == "completed" and pipeline.phase_b_status == "completed":
+        return {
+            "phase": "phase_b",
+            "step": "saving_result",
+            "progress": 92,
+            "status_label": "saving result",
+        }
+    if pipeline.phase_a_status == "completed":
+        return {
+            "phase": "phase_b",
+            "step": "surface_inspection",
+            "progress": 58,
+            "status_label": "phase A completed",
+        }
+    return {
+        "phase": "phase_a",
+        "step": "preprocessing",
+        "progress": 18,
+        "status_label": "preprocessing running",
+    }
+
+
 def pipeline_status_payload(pipeline: AIGradingPipelineRun | None) -> dict[str, Any]:
     if pipeline is None:
-        return {"ok": True, "status": "not_started"}
+        progress = pipeline_progress_payload(None)
+        return {"ok": True, "status": "not_started", **progress, "progress_state": progress}
+    progress = pipeline_progress_payload(pipeline)
     return {
         "ok": True,
         "id": pipeline.id,
@@ -834,6 +894,11 @@ def pipeline_status_payload(pipeline: AIGradingPipelineRun | None) -> dict[str, 
         "status": pipeline.status,
         "phase_a_status": pipeline.phase_a_status,
         "phase_b_status": pipeline.phase_b_status,
+        "phase": progress["phase"],
+        "step": progress["step"],
+        "progress": progress["progress"],
+        "status_label": progress["status_label"],
+        "progress_state": progress,
         "phase_a_result": json_loads(pipeline.phase_a_result_json, None),
         "phase_b_result": json_loads(pipeline.phase_b_result_json, None),
         "final_result": json_loads(pipeline.final_result_json, None),

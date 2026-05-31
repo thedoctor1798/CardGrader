@@ -888,6 +888,7 @@ export type PhaseAFinding = {
 };
 
 export type FinalGradingResult = {
+  overall_score?: number;
   estimated_grade?: string;
   grade_range?: string;
   confidence?: number;
@@ -914,6 +915,16 @@ export type AIGradingPipelineStatus = {
   owned_card_id?: number;
   analysis_run_id?: number | null;
   status: string;
+  phase?: string;
+  step?: string;
+  progress?: number;
+  status_label?: string;
+  progress_state?: {
+    phase: string;
+    step: string;
+    progress: number;
+    status_label?: string;
+  };
   phase_a_status?: string | null;
   phase_b_status?: string | null;
   phase_a_result?: PhaseAFinding | null;
