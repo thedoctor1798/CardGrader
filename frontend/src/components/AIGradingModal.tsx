@@ -143,7 +143,7 @@ export function AIGradingModal({ open, pipeline, error, debugMode, isRunning, on
               </div>
               <div className="mt-5 grid gap-3 md:grid-cols-2">
                 {(["Phase A", "Phase B"] as const).map((phaseName) => (
-                  <div key={phaseName} className="rounded-2xl border border-white/10 bg-white/[0.045] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
+                  <div key={phaseName} className="rounded-2xl border border-white/10 bg-slate-950/42 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
                     <div className="mb-3 text-xs font-semibold uppercase text-slate-400">{phaseName}</div>
                     <div className="space-y-3">
                       {timeline.filter((item) => item.phase === phaseName).map((item) => {

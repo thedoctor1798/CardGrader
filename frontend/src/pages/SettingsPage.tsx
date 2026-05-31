@@ -165,7 +165,7 @@ export function SettingsPage({ debugMode, onToggleDebugMode }: SettingsPageProps
             <StatCard label="Reachable" value={localAI.reachable ? "yes" : "no"} tone={localAI.reachable ? "good" : "warn"} />
             <StatCard label="Worker" value={localAI.worker_reachable ? "reachable" : "not reachable"} tone={localAI.worker_reachable ? "good" : "warn"} />
           </div>
-          <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.035] p-3 text-sm leading-6 text-slate-300">{localAI.message}</div>
+          <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/42 p-3 text-sm leading-6 text-slate-200">{localAI.message}</div>
           <div className="mt-4 flex flex-wrap gap-2">
             <StatusBadge tone="info">AI_MODEL_NAME / LOCAL_AI_MODEL_NAME</StatusBadge>
             <StatusBadge tone="info">AI_MAX_CONTEXT_TOKENS</StatusBadge>
@@ -255,7 +255,7 @@ export function SettingsPage({ debugMode, onToggleDebugMode }: SettingsPageProps
                 onChange={(event) => setAiSettings({ ...aiSettings, temperature: Number(event.target.value) })}
               />
             </label>
-            <div className="grid gap-3 rounded-2xl border border-white/10 bg-white/[0.035] p-3">
+            <div className="grid gap-3 rounded-2xl border border-white/10 bg-slate-950/42 p-3">
               <label className="flex items-center justify-between gap-3 text-sm text-slate-200">
                 <span>Send Diagnostic Images</span>
                 <input

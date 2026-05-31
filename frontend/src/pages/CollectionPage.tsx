@@ -567,7 +567,7 @@ export function CollectionPage({ mode = "browse", onOpenOwnedCard }: CollectionP
             />
           </label>
           <button
-            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.055] px-3 text-sm font-medium text-slate-100 hover:bg-white/[0.09]"
+            className="glass-button inline-flex min-h-11 items-center justify-center gap-2 px-3 text-sm font-medium text-slate-100"
             onClick={() => setShowFilters((current) => !current)}
             type="button"
           >
@@ -708,7 +708,7 @@ export function CollectionPage({ mode = "browse", onOpenOwnedCard }: CollectionP
                   <div className="truncate text-base font-semibold text-slate-50">{item.card?.name ?? `Card #${item.card_id}`}</div>
                   <div className="mt-1 truncate text-sm text-slate-400">{[item.card?.set_name, item.card?.set_code, item.card?.card_number].filter(Boolean).join(" / ") || "No set data"}</div>
                 </div>
-                <span className="shrink-0 rounded-full border border-white/12 bg-white/[0.055] px-2 py-1 text-xs text-slate-300">{item.status ?? "-"}</span>
+                <span className="shrink-0 rounded-full border border-white/10 bg-slate-950/55 px-2 py-1 text-xs text-slate-200">{item.status ?? "-"}</span>
               </div>
               <div className="mt-4 grid grid-cols-2 gap-2 text-xs text-slate-400">
                 <div className="rounded-2xl border border-white/10 bg-[#0d1117]/42 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
@@ -729,9 +729,9 @@ export function CollectionPage({ mode = "browse", onOpenOwnedCard }: CollectionP
           ))}
         </div>
       ) : (
-        <div className="overflow-x-auto rounded-[24px] border border-white/10 bg-white/[0.035] shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
+        <div className="overflow-x-auto rounded-[24px] border border-white/10 bg-slate-950/38 shadow-[inset_0_1px_0_rgba(255,255,255,0.035)]">
           <table className="min-w-[860px] w-full divide-y divide-white/10 text-sm">
-            <thead className="bg-white/[0.045] text-left text-xs uppercase tracking-wide text-slate-500">
+            <thead className="bg-slate-900/58 text-left text-xs uppercase tracking-wide text-slate-400">
               <tr>
                 <th className="px-4 py-3">Kártya</th>
                 <th className="px-4 py-3">Set</th>
@@ -745,7 +745,7 @@ export function CollectionPage({ mode = "browse", onOpenOwnedCard }: CollectionP
             </thead>
             <tbody className="divide-y divide-white/10 bg-[#111722]/35">
               {filteredItems.map((item) => (
-                <tr key={item.id} className="transition hover:bg-white/[0.055]">
+                <tr key={item.id} className="transition hover:bg-slate-800/58">
                   <td className="px-4 py-4 font-medium text-slate-100">
                     <div className="flex items-center gap-3">
                       {item.thumbnail_file_path ? (
@@ -759,7 +759,7 @@ export function CollectionPage({ mode = "browse", onOpenOwnedCard }: CollectionP
                   <td className="px-4 py-4 text-slate-300">{item.card?.set_name ?? "-"}</td>
                   <td className="px-4 py-4 text-slate-300">{item.card?.card_number ?? "-"}</td>
                   <td className="px-4 py-4 text-slate-300">{item.copy_label ?? "-"}</td>
-                  <td className="px-4 py-4"><span className="rounded-full border border-white/12 bg-white/[0.055] px-2 py-1 text-xs text-slate-300">{item.status ?? "-"}</span></td>
+                  <td className="px-4 py-4"><span className="rounded-full border border-white/10 bg-slate-950/55 px-2 py-1 text-xs text-slate-200">{item.status ?? "-"}</span></td>
                   <td className="px-4 py-4 text-slate-300">{formatHuf(item.acquired_price_huf)}</td>
                   <td className="px-4 py-4 text-slate-300">{item.latest_raw_price_huf === null || item.latest_raw_price_huf === undefined ? "Még nincs ár" : formatHuf(item.latest_raw_price_huf)}</td>
                   <td className="px-4 py-4 text-right">

@@ -131,7 +131,7 @@ export function DebugPage() {
         ) : (
           <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
             {priceStatus.providers.map((provider) => (
-              <div key={provider.provider} className="rounded-2xl border border-white/10 bg-white/[0.04] p-4">
+              <div key={provider.provider} className="rounded-2xl border border-white/10 bg-slate-950/42 p-4">
                 <div className="flex items-start justify-between gap-3">
                   <div>
                     <div className="font-semibold text-slate-50">{provider.provider}</div>

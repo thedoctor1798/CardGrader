@@ -1620,7 +1620,7 @@ export function CardDetailPage({ ownedCardId, debugMode, onDeleted }: CardDetail
         </div>
         <div className="mt-4 grid gap-2 sm:grid-cols-5">
           {gradingStepState.map((step) => (
-            <div key={step.label} className={`rounded-xl border px-3 py-2 text-xs ${step.done ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-100" : "border-white/10 bg-white/[0.035] text-slate-400"}`}>
+            <div key={step.label} className={`rounded-xl border px-3 py-2 text-xs ${step.done ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-100" : "border-white/10 bg-slate-950/42 text-slate-300"}`}>
               <div className="font-semibold">{step.label}</div>
               <div className="mt-0.5">{step.done ? "Ready" : "Pending"}</div>
             </div>
@@ -3074,7 +3074,7 @@ function ProcessedDiagnosticsPanel({
           )}
         </div>
         <div className="space-y-3">
-          <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-3">
+          <div className="rounded-2xl border border-white/10 bg-slate-950/42 p-3">
             <div className="text-xs font-semibold uppercase text-slate-500">Image clarity</div>
             <div className="mt-2 text-sm text-slate-200">{imageLabel}</div>
             <div className="mt-1 text-xs text-slate-500">Switching side or tab always changes this labeled image only.</div>
@@ -3089,7 +3089,7 @@ function ProcessedDiagnosticsPanel({
         </div>
       </div>
       {side && (
-        <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-3">
+        <div className="rounded-2xl border border-white/10 bg-slate-950/42 p-3">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <div>
               <div className="text-sm font-semibold text-slate-100">Centering details</div>

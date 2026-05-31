@@ -7,7 +7,7 @@ type StatusBadgeProps = {
 };
 
 const toneClass = {
-  neutral: "border-white/12 bg-white/[0.055] text-slate-200",
+  neutral: "border-white/10 bg-slate-900/55 text-slate-100",
   info: "border-cyan-300/30 bg-cyan-300/10 text-cyan-100",
   success: "border-emerald-300/30 bg-emerald-300/10 text-emerald-100",
   warning: "border-amber-300/35 bg-amber-300/10 text-amber-100",
