@@ -64,10 +64,13 @@ Useful worker controls:
 
 ```env
 AI_MODEL_NAME=
+LM_STUDIO_RESPONSE_FORMAT=text
 AI_WORKER_CONNECT_TIMEOUT_SECONDS=30
 AI_WORKER_TIMEOUT_SECONDS=300
 AI_WORKER_STREAMING_ENABLED=false
 ```
+
+`LM_STUDIO_RESPONSE_FORMAT` accepts `text` or `json_schema` and defaults to `text`. The `text` mode asks LM Studio for plain text and the worker safely extracts the first JSON object from the model output. The worker does not send OpenAI's legacy `json_object` response format to LM Studio.
 
 ## Security
 

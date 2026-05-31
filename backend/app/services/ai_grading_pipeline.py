@@ -410,7 +410,7 @@ def wrap_prompt(prompt: str) -> str:
         return prompt
     return (
         "Do not think step by step. Do not output hidden reasoning. "
-        "Return only JSON. Start with { and end with }.\n\n"
+        "Return JSON only. Start with { and end with }.\n\n"
         f"{prompt}\n\n/no_think"
     )
 
@@ -468,7 +468,7 @@ def call_remote_worker_json(prompt: str, assets: list[AnalysisAsset], max_tokens
         "prompt": wrap_prompt(prompt),
         "images": images,
         "max_tokens": token_limit,
-        "response_format": "json_object",
+        "response_format": "text",
         "phase": phase,
         "model_name": model_name,
         "stream": LOCAL_AI_STREAMING_ENABLED,

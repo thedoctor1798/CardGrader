@@ -37,8 +37,17 @@ def int_env(name: str, default: int) -> int:
         return default
 
 
+def response_format_env(name: str, default: str = "text") -> str:
+    value = (os.getenv(name) or default).strip().lower()
+    if value in {"text", "json_schema"}:
+        return value
+    logger.warning("Invalid %s=%s; using %s", name, value, default)
+    return default
+
+
 LM_STUDIO_BASE_URL = os.getenv("LM_STUDIO_BASE_URL", "http://127.0.0.1:1234/v1").rstrip("/")
 LM_STUDIO_MODEL = (os.getenv("LM_STUDIO_MODEL") or os.getenv("AI_MODEL_NAME") or "").strip()
+LM_STUDIO_RESPONSE_FORMAT = response_format_env("LM_STUDIO_RESPONSE_FORMAT", "text")
 AI_WORKER_HOST = os.getenv("AI_WORKER_HOST", "0.0.0.0")
 AI_WORKER_PORT = int_env("AI_WORKER_PORT", 8765)
 AI_WORKER_CONNECT_TIMEOUT_SECONDS = int_env("AI_WORKER_CONNECT_TIMEOUT_SECONDS", 30)
@@ -54,6 +63,12 @@ VISION_MODEL_PREFERENCES = [
     "qwen/qwen3-vl-8b",
     "qwen/qwen2.5-vl-7b",
 ]
+
+CARD_GRADING_PHASE_RESULT_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": True,
+}
 
 
 class WorkerImage(BaseModel):
@@ -93,7 +108,7 @@ class VisionJsonRequest(BaseModel):
     prompt: str
     images: list[WorkerImage] = Field(default_factory=list)
     max_tokens: int | None = None
-    response_format: str | None = "json_object"
+    response_format: str | None = None
     phase: str | None = None
     model_name: str | None = None
     stream: bool | None = None
@@ -220,6 +235,19 @@ def parse_model_json(content: str) -> dict[str, Any]:
 def response_content(response: dict[str, Any]) -> str:
     message = response.get("choices", [{}])[0].get("message", {})
     return message.get("content") or message.get("reasoning_content") or ""
+
+
+def lm_studio_response_format_payload() -> dict[str, Any]:
+    if LM_STUDIO_RESPONSE_FORMAT == "json_schema":
+        return {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "card_grading_phase_result",
+                "schema": CARD_GRADING_PHASE_RESULT_JSON_SCHEMA,
+                "strict": False,
+            },
+        }
+    return {"type": "text"}
 
 
 def validate_images(images: list[WorkerImage]) -> list[WorkerImage]:
@@ -448,9 +476,8 @@ def lm_studio_vision_json_payload(request: VisionJsonRequest, model: str) -> dic
         "temperature": 0,
         "max_tokens": max_tokens,
         "stream": bool(request.stream) if request.stream is not None else AI_WORKER_STREAMING_ENABLED,
+        "response_format": lm_studio_response_format_payload(),
     }
-    if request.response_format == "json_object":
-        payload["response_format"] = {"type": "json_object"}
     return payload
 
 
@@ -593,7 +620,16 @@ def vision_json(request: VisionJsonRequest, _: None = Depends(require_token)) ->
         lm_payload = lm_studio_vision_json_payload(request, model)
         endpoint = f"{LM_STUDIO_BASE_URL}/chat/completions"
         size = payload_size_bytes(lm_payload)
-        logger.info("Final selected model before AI request: %s endpoint=%s phase=%s images=%s payload_bytes=%s", model, endpoint, request.phase, len(request.images), size)
+        response_format = lm_payload.get("response_format", {}).get("type", "none")
+        logger.info(
+            "Final selected model before AI request: %s endpoint=%s phase=%s images=%s response_format=%s payload_bytes=%s",
+            model,
+            endpoint,
+            request.phase,
+            len(request.images),
+            response_format,
+            size,
+        )
         response = http_json("POST", endpoint, lm_payload, timeout_seconds=AI_WORKER_TIMEOUT_SECONDS)
         duration = round(time.perf_counter() - started, 2)
         raw_content = response_content(response)
@@ -605,6 +641,8 @@ def vision_json(request: VisionJsonRequest, _: None = Depends(require_token)) ->
                 {
                     "ok": False,
                     "error": "model_response_not_valid_json",
+                    "parse_error": str(exc),
+                    "raw_text_preview": raw_content[:1000],
                     "raw_response_preview": raw_content[:1000],
                     **image_debug,
                 }
