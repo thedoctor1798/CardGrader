@@ -31,7 +31,9 @@ import { EmptyState } from "../components/EmptyState";
 import { GlobalLoadingOverlay } from "../components/GlobalLoadingOverlay";
 import { LoadingState } from "../components/LoadingState";
 import { Panel } from "../components/Panel";
+import { SegmentedControl } from "../components/SegmentedControl";
 import { StatCard } from "../components/StatCard";
+import { StatusBadge } from "../components/StatusBadge";
 import { formatDate, formatHuf, formatNumber } from "../utils/format";
 
 const mediaLabels = [
@@ -49,18 +51,19 @@ const mediaLabels = [
 const statuses = ["raw_owned", "graded_owned", "sent_to_grading", "listed_for_sale", "sold", "kept_long_term"];
 const sources = ["pack", "blister", "single_purchase", "trade", "unknown"];
 const processedVariantOptions = [
-  ["original_normalized", "Original"],
-  ["grayscale_clahe", "Grayscale + CLAHE"],
-  ["sobel_edges", "Sobel Edges"],
-  ["emboss_surface", "Emboss Surface"],
-  ["highpass_texture", "High Pass Texture"],
-  ["canny_edges", "Canny Edges"],
-  ["perspective_corrected", "Perspective Corrected"],
-  ["centering_debug", "Centering Debug"],
+  ["original_normalized", "Original", "Normal image prepared for review."],
+  ["grayscale_clahe", "CLAHE", "Contrast-enhanced grayscale."],
+  ["sobel_edges", "Sobel", "Edges and fine lines."],
+  ["emboss_surface", "Emboss", "Surface dents and scratch texture."],
+  ["highpass_texture", "High Pass", "Micro texture and scratches."],
+  ["canny_edges", "Canny", "Contour and edge detection."],
+  ["perspective_corrected", "Normalized", "Perspective-corrected card crop."],
+  ["centering_debug", "Centering Debug", "Measurement overlay."],
 ] as const;
 
 type CardDetailPageProps = {
   ownedCardId: number;
+  debugMode: boolean;
 };
 
 type PriceForm = {
@@ -416,27 +419,27 @@ function RemoteAIGradePanel({ response }: { response: RemoteAIGradeResponse }) {
   );
 }
 
-function SmartGradePanel({ pipeline, onRetryPhaseB }: { pipeline: AIGradingPipelineStatus | null; onRetryPhaseB: () => void }) {
+function SmartGradePanel({ pipeline, debugMode, onRetryPhaseB }: { pipeline: AIGradingPipelineStatus | null; debugMode: boolean; onRetryPhaseB: () => void }) {
   if (!pipeline || pipeline.status === "not_started") return null;
   const final = pipeline.final_result;
   const phaseAFinished = pipeline.phase_a_status === "completed";
   const phaseBFinished = pipeline.phase_b_status === "completed";
   const phaseBFailed = pipeline.phase_b_status === "failed" || pipeline.status === "phase_b_failed";
   return (
-    <div className="mt-4 rounded-lg border border-emerald-500/25 bg-emerald-500/10 p-4 text-sm text-emerald-50">
+    <div className="mt-4 rounded-2xl border border-emerald-400/25 bg-emerald-500/10 p-4 text-sm text-emerald-50">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
-          <div className="font-semibold">Two-phase AI grading</div>
-          <div className="mt-1 text-xs opacity-80">Status: {pipeline.status}</div>
+          <div className="font-semibold">AI grading result</div>
+          <div className="mt-1 text-xs opacity-80">Two-step workflow status: {pipeline.status}</div>
         </div>
         <div className="text-right">
-          <div className="text-2xl font-semibold">{final?.estimated_grade ?? "-"}</div>
+          <div className="text-4xl font-semibold leading-none">{final?.estimated_grade ?? "-"}</div>
           <div className="text-xs opacity-80">Final estimate</div>
         </div>
       </div>
       <div className="mt-4 grid gap-2 sm:grid-cols-2">
-        <StatCard label="Step 1" value={phaseAFinished ? "Completed" : pipeline.phase_a_status ?? "Pending"} />
-        <StatCard label="Step 2" value={phaseBFinished ? "Completed" : pipeline.phase_b_status ?? "Pending"} />
+        <StatCard label="Visual + centering" value={phaseAFinished ? "Completed" : pipeline.phase_a_status ?? "Pending"} />
+        <StatCard label="Surface + final grade" value={phaseBFinished ? "Completed" : pipeline.phase_b_status ?? "Pending"} />
         <StatCard label="Range" value={final?.grade_range ?? "-"} />
         <StatCard label="Confidence" value={final?.confidence !== undefined ? formatNumber(final.confidence, 2) : "-"} />
       </div>
@@ -451,15 +454,21 @@ function SmartGradePanel({ pipeline, onRetryPhaseB }: { pipeline: AIGradingPipel
       {final?.reasoning_summary && <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-slate-100">{final.reasoning_summary}</div>}
       {final?.risk_flags?.length ? (
         <div className="mt-3 flex flex-wrap gap-2">
-          {final.risk_flags.map((flag) => <span key={flag} className="rounded-full border border-amber-500/30 px-2 py-0.5 text-xs text-amber-100">{flag}</span>)}
+          {final.risk_flags.map((flag) => <StatusBadge key={flag} tone="warning">{flag}</StatusBadge>)}
         </div>
       ) : null}
+      {final?.recommended_action && (
+        <div className="mt-3 rounded-2xl border border-white/10 bg-slate-950/35 p-3">
+          <div className="text-xs font-semibold uppercase text-slate-500">Recommended action</div>
+          <div className="mt-1 text-base font-semibold text-slate-50">{final.recommended_action}</div>
+        </div>
+      )}
       {phaseBFailed && (
         <button className="mt-3 inline-flex items-center justify-center gap-2 rounded-lg border border-amber-500/40 px-3 py-2 text-sm font-medium text-amber-100 hover:bg-amber-500/10" onClick={onRetryPhaseB} type="button">
           <RefreshCw size={16} /> Retry Phase B
         </button>
       )}
-      <details className="mt-3">
+      {debugMode && <details className="mt-3">
         <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-emerald-200">Developer details</summary>
         <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded bg-slate-950/70 p-3 text-xs text-slate-200">{JSON.stringify({
           phase_a: pipeline.phase_a_result,
@@ -468,7 +477,7 @@ function SmartGradePanel({ pipeline, onRetryPhaseB }: { pipeline: AIGradingPipel
           model_parameters: pipeline.model_parameters,
           error: pipeline.error_message,
         }, null, 2)}</pre>
-      </details>
+      </details>}
     </div>
   );
 }
@@ -524,11 +533,8 @@ function RecognitionPanel({
                 <button className="rounded-lg bg-emerald-600 px-3 py-1.5 text-xs font-medium text-white hover:bg-emerald-500 disabled:opacity-60" disabled={busy} onClick={() => onAccept(candidate.catalog_card_id)} type="button">
                   Ez az
                 </button>
-                <button className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800/50" onClick={() => { window.location.hash = "#/collection"; }} type="button">
-                  Másikat választok
-                </button>
-                <button className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800/50" onClick={() => { window.location.hash = "#/collection"; }} type="button">
-                  Kézi megadás
+                <button className="rounded-lg border border-slate-700 px-3 py-1.5 text-xs font-medium text-slate-300 hover:bg-slate-800/50" onClick={() => { window.location.hash = "#/add"; }} type="button">
+                  Manual override
                 </button>
               </div>
             </div>
@@ -667,7 +673,7 @@ function workOverlayForLabel(label: string | null): WorkOverlayState | null {
   };
 }
 
-export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
+export function CardDetailPage({ ownedCardId, debugMode }: CardDetailPageProps) {
   const [ownedCard, setOwnedCard] = useState<OwnedCard | null>(null);
   const [card, setCard] = useState<Card | null>(null);
   const [media, setMedia] = useState<CardMedia[]>([]);
@@ -1450,6 +1456,14 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
 
   const displayMarketPrice = latestMarketPrice ?? (isMarketPrice(latestPrice) ? latestPrice : null);
   const displayManualPrice = latestManualOwnedPrice ?? (!isMarketPrice(latestPrice) ? latestPrice : null);
+  const imageCoverageLabel = latestFrontImage && latestBackImage ? "front + back" : latestFrontImage ? "front only" : latestBackImage ? "back only" : "no images";
+  const gradingStepState = [
+    { label: "Images", done: Boolean(latestFrontImage || latestBackImage) },
+    { label: "Recognition", done: Boolean(card?.name || recognitionResult?.candidates?.length) },
+    { label: "Preprocess", done: Boolean(processedImages && Object.keys(processedImages.sides ?? {}).length > 0) },
+    { label: "Centering", done: Boolean(latestCentering || latestCenteringBySide.front || latestCenteringBySide.back) },
+    { label: "AI grade", done: gradingPipeline?.status === "completed" || Boolean(gradingPipeline?.final_result) },
+  ];
 
   if (loading) return <LoadingState label="Kártya részletek betöltése..." />;
   if (error && !ownedCard) return <EmptyState label={`Nem sikerült betölteni a kártyát: ${error}`} />;
@@ -1458,6 +1472,34 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
   return (
     <div className="space-y-4">
       {error && <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-200">{error}</div>}
+
+      <section className="glass-surface rounded-2xl p-4 sm:p-5">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <StatusBadge tone={ownedCard.status === "graded_owned" ? "success" : "info"}>{ownedCard.status ?? "raw_owned"}</StatusBadge>
+              <StatusBadge tone={latestBackImage ? "success" : "warning"}>{imageCoverageLabel}</StatusBadge>
+              {debugMode && <StatusBadge tone="warning">Debug visible</StatusBadge>}
+            </div>
+            <h2 className="mt-3 truncate text-2xl font-semibold text-slate-50 sm:text-3xl">{card?.name ?? `Card #${ownedCard.card_id}`}</h2>
+            <p className="mt-1 text-sm text-slate-400">
+              {[card?.set_name, card?.set_code, card?.card_number, card?.rarity, card?.language].filter(Boolean).join(" / ") || "Catalog details are not assigned yet."}
+            </p>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 lg:min-w-[360px]">
+            <StatCard label="Latest value" value={displayMarketPrice ? sourcePriceDisplay(displayMarketPrice) : "No price"} />
+            <StatCard label="AI grade" value={gradingPipeline?.final_result?.estimated_grade ?? report?.estimated_grade_range?.estimated_grade_high ?? "-"} tone={gradingPipeline?.final_result ? "good" : "default"} />
+          </div>
+        </div>
+        <div className="mt-4 grid gap-2 sm:grid-cols-5">
+          {gradingStepState.map((step) => (
+            <div key={step.label} className={`rounded-xl border px-3 py-2 text-xs ${step.done ? "border-emerald-400/30 bg-emerald-400/10 text-emerald-100" : "border-white/10 bg-white/[0.035] text-slate-400"}`}>
+              <div className="font-semibold">{step.label}</div>
+              <div className="mt-0.5">{step.done ? "Ready" : "Pending"}</div>
+            </div>
+          ))}
+        </div>
+      </section>
 
       <div className="grid gap-4 xl:grid-cols-[370px_minmax(0,1fr)_430px]">
         <div className="space-y-4">
@@ -1535,6 +1577,38 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
               </button>
             ) : (
               <EmptyState label="Még nincs feltöltött kép." />
+            )}
+            {latestFrontImage && !latestBackImage && (
+              <div className="mt-4 rounded-2xl border border-amber-400/30 bg-amber-500/10 p-3 text-sm text-amber-100">
+                Back image is missing. The workflow can continue in front-only mode, but final confidence may be lower.
+              </div>
+            )}
+            {imageMedia.length > 0 && (
+              <div className="mt-4">
+                <div className="mb-2 text-xs font-semibold uppercase text-slate-500">Uploaded image roles</div>
+                <div className="grid grid-cols-2 gap-2">
+                  {imageMedia.slice(0, 6).map((item) => {
+                    const side = sideFromLabel(item.label);
+                    return (
+                      <button
+                        key={item.id}
+                        className="rounded-xl border border-white/10 bg-slate-950/30 p-2 text-left transition hover:border-blue-300/40"
+                        onClick={() => {
+                          if (side) setSelectedPreviewSide(side);
+                          setPreviewAsset(item);
+                        }}
+                        type="button"
+                      >
+                        <img className="aspect-[3/4] w-full rounded-lg object-cover" src={mediaUrl(item.file_path, cacheKeyFor(item))} alt={item.label} />
+                        <div className="mt-2 flex items-center justify-between gap-2 text-xs">
+                          <span className="truncate text-slate-300">{item.label}</span>
+                          <StatusBadge tone={side ? "success" : "warning"}>{side ?? "extra"}</StatusBadge>
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
             )}
             {!hasAnalysisImage && (
               <div className="mt-4 rounded-lg border border-amber-500/30 bg-amber-500/10 p-3 text-sm text-amber-100">
@@ -1798,7 +1872,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
 
         <div className="space-y-4">
           <Panel title="Képi elemzés" subtitle="OpenCV előfeldolgozás és Local AI elemzés server-local vagy később remote worker módban.">
-            <div className="grid gap-3 md:grid-cols-4">
+            <div className="grid gap-3 md:grid-cols-3">
               <button className="inline-flex items-center justify-center gap-2 rounded-lg bg-blue-600 px-3 py-2 text-sm font-medium text-white hover:bg-blue-500 disabled:opacity-60" disabled={busy} onClick={runAnalysis} type="button">
                 <Play size={16} /> {busyLabel === "Elemzés fut..." ? "Elemzés fut..." : "OpenCV elemzés indítása"}
               </button>
@@ -1808,9 +1882,9 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
               <button className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50" disabled={busy || Boolean(localAIBlockedReason)} onClick={startSmartAIGrading} type="button">
                 <Play size={16} /> Start AI Grading
               </button>
-              <button className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50" disabled={busy || Boolean(localAIBlockedReason)} onClick={runLocalAI} type="button">
+              {debugMode && <button className="inline-flex items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white hover:bg-emerald-500 disabled:opacity-50" disabled={busy || Boolean(localAIBlockedReason)} onClick={runLocalAI} type="button">
                 <Play size={16} /> Local AI elemzés
-              </button>
+              </button>}
               <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-cyan-500/40 px-3 py-2 text-sm font-medium text-cyan-100 hover:bg-cyan-500/10 disabled:opacity-50" disabled={busy || (!centeringSources.front && !centeringSources.back)} onClick={() => setShowCenteringEditor(true)} type="button">
                 Centering beállítása
               </button>
@@ -1827,10 +1901,10 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
               </div>
             )}
             <InlineNotice notice={notice} scope="analysis" />
-            <SmartGradePanel pipeline={gradingPipeline} onRetryPhaseB={retrySmartPhaseB} />
-            {remoteAIGrade && <RemoteAIGradePanel response={remoteAIGrade} />}
+            <SmartGradePanel pipeline={gradingPipeline} debugMode={debugMode} onRetryPhaseB={retrySmartPhaseB} />
+            {debugMode && remoteAIGrade && <RemoteAIGradePanel response={remoteAIGrade} />}
             <details className="mt-4 rounded-lg border border-slate-800 bg-slate-950/25 p-3" open={Boolean(processedImages && Object.keys(processedImages.sides).length)}>
-              <summary className="cursor-pointer text-sm font-medium text-slate-300">Phase 16 preprocessing/debug panel</summary>
+              <summary className="cursor-pointer text-sm font-medium text-slate-300">Processed image viewer</summary>
               <ProcessedDiagnosticsPanel
                 processed={processedImages}
                 selectedSide={selectedProcessedSide}
@@ -1841,7 +1915,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                 onRecalculate={recalculateSmartCentering}
               />
             </details>
-            <details className="mt-4 rounded-lg border border-slate-800 bg-slate-950/25 p-3">
+            {debugMode && <details className="mt-4 rounded-lg border border-slate-800 bg-slate-950/25 p-3">
               <summary className="cursor-pointer text-sm font-medium text-slate-300">Fejlesztői / Debug eszközök</summary>
               <div className="mt-3 grid gap-2 md:grid-cols-2">
                 <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-500/40 px-3 py-2 text-sm font-medium text-blue-200 hover:bg-blue-500/10 disabled:opacity-50" disabled={busy || Boolean(localAIBlockedReason)} onClick={() => runLocalAIPass("front")} type="button">
@@ -1909,10 +1983,10 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                 )}
               </div>
             )}
-            </details>
+            </details>}
           </Panel>
 
-          <Panel title="Analysis run lista">
+          {debugMode && <Panel title="Analysis run lista">
             {analysisRuns.length === 0 ? (
               <EmptyState label="Még nincs elemzési előzmény." />
             ) : (
@@ -1931,7 +2005,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                 ))}
               </div>
             )}
-          </Panel>
+          </Panel>}
 
           <Panel title="Asset gallery" subtitle="Kattints egy thumbnailre a nagyobb előnézethez.">
             {!report || report.assets.length === 0 ? (
@@ -1962,7 +2036,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                     )}
                   </div>
                 ))}
-                <details className="rounded-lg border border-slate-800 bg-slate-950/25 p-3">
+                {debugMode && <details className="rounded-lg border border-slate-800 bg-slate-950/25 p-3">
                   <summary className="cursor-pointer text-sm font-medium text-slate-300">Fejlesztői / Debug eszközök</summary>
                   <div className="mt-4 space-y-4">
                     <div className="rounded-lg border border-amber-500/25 bg-amber-500/10 p-3 text-sm text-amber-100">
@@ -1981,7 +2055,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                       ))}
                     </div>
                   </div>
-                </details>
+                </details>}
               </div>
             )}
           </Panel>
@@ -2038,7 +2112,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                   <div className="font-semibold">{report.recommendation ?? "-"}</div>
                   <p className="mt-2 leading-6">{report.recommendation_reason}</p>
                 </div>
-                <details className="rounded-lg border border-slate-800 bg-slate-950/25 p-3 text-sm text-slate-300">
+                {debugMode && <details className="rounded-lg border border-slate-800 bg-slate-950/25 p-3 text-sm text-slate-300">
                   <summary className="cursor-pointer font-medium">AI grading debug</summary>
                   <div className="mt-3 space-y-2 text-xs text-slate-400">
                     <div>Scope: {report.analysis_scope ?? "-"}</div>
@@ -2049,11 +2123,11 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                   <div className="mt-3">
                     <ImagePayloadDebug payload={report.image_payload} />
                   </div>
-                </details>
+                </details>}
 
                 <InlineNotice notice={notice} scope="report" />
 
-                <details className="rounded-lg border border-slate-800 bg-slate-950/25 p-3">
+                {debugMode && <details className="rounded-lg border border-slate-800 bg-slate-950/25 p-3">
                   <summary className="cursor-pointer text-sm font-medium text-slate-300">Fejlesztői / Debug eszközök</summary>
                   <div className="mt-3 flex flex-wrap gap-2">
                     <button className="inline-flex items-center gap-2 rounded-lg border border-blue-500/40 px-3 py-2 text-sm text-blue-200 hover:bg-blue-500/10 disabled:opacity-60" disabled={busy || !latestAnalysis} onClick={refreshScore} type="button">
@@ -2063,7 +2137,7 @@ export function CardDetailPage({ ownedCardId }: CardDetailPageProps) {
                       Annotációk generálása
                     </button>
                   </div>
-                </details>
+                </details>}
 
                 <FindingSection title="Megerősített hibák - front" findings={frontFindings} />
                 <FindingSection title="Megerősített hibák - back" findings={backFindings} />
@@ -2709,25 +2783,18 @@ function ProcessedDiagnosticsPanel({
   const sides = processed?.sides ?? {};
   const side = sides[selectedSide] ?? sides.front ?? sides.back ?? null;
   const imagePath = side?.generated_images?.[selectedVariant] ?? side?.generated_images?.original_normalized;
+  const selectedVariantInfo = processedVariantOptions.find(([key]) => key === selectedVariant);
   if (!processed || Object.keys(sides).length === 0) {
     return <EmptyState label="No Phase 16 processed images yet." />;
   }
   return (
     <div className="mt-4 space-y-4">
       <div className="flex flex-wrap items-center justify-between gap-2">
-        <div className="flex rounded-lg border border-slate-800 bg-slate-950/35 p-1">
-          {(["front", "back"] as const).map((item) => (
-            <button
-              key={item}
-              className={`rounded-md px-3 py-1.5 text-sm ${selectedSide === item ? "bg-blue-600 text-white" : "text-slate-300 hover:bg-slate-800/70"} disabled:opacity-40`}
-              disabled={!sides[item]}
-              onClick={() => onSelectSide(item)}
-              type="button"
-            >
-              {item}
-            </button>
-          ))}
-        </div>
+        <SegmentedControl
+          options={(["front", "back"] as const).map((item) => ({ value: item, label: item === "front" ? "Front" : "Back", disabled: !sides[item] }))}
+          value={selectedSide}
+          onChange={onSelectSide}
+        />
         {side && (
           <div className="flex flex-wrap gap-2">
             <button className="rounded-lg border border-cyan-500/40 px-3 py-2 text-sm text-cyan-100 hover:bg-cyan-500/10" onClick={() => onOpenBoundary(side.side as "front" | "back")} type="button">Adjust corners</button>
@@ -2735,11 +2802,11 @@ function ProcessedDiagnosticsPanel({
           </div>
         )}
       </div>
-      <div className="flex flex-wrap gap-2">
+      <div className="flex gap-2 overflow-x-auto pb-1">
         {processedVariantOptions.map(([key, label]) => (
           <button
             key={key}
-            className={`rounded-lg border px-3 py-1.5 text-xs ${selectedVariant === key ? "border-blue-500 bg-blue-500/15 text-blue-100" : "border-slate-800 text-slate-300 hover:bg-slate-800/60"} disabled:opacity-35`}
+            className={`min-h-10 shrink-0 rounded-xl border px-3 py-2 text-xs font-medium ${selectedVariant === key ? "border-blue-400/40 bg-blue-500/15 text-blue-100" : "border-white/10 text-slate-300 hover:bg-white/10"} disabled:opacity-35`}
             disabled={!side?.generated_images?.[key]}
             onClick={() => onSelectVariant(key)}
             type="button"
@@ -2748,6 +2815,7 @@ function ProcessedDiagnosticsPanel({
           </button>
         ))}
       </div>
+      {selectedVariantInfo && <p className="text-xs leading-5 text-slate-500">{selectedVariantInfo[2]}</p>}
       {imagePath ? (
         <img className="max-h-[520px] w-full rounded-lg border border-slate-800 object-contain bg-slate-950" src={mediaUrl(imagePath, side?.updated_at)} alt={selectedVariant} />
       ) : (

@@ -1,15 +1,22 @@
-import { RefreshCw, Trash2 } from "lucide-react";
+import { Bug, RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
 import type { AppInfo, LocalAIConfig, LocalAIStatus, LocalAITestConnection } from "../api/types";
+import { ActionButton } from "../components/ActionButton";
 import { EmptyState } from "../components/EmptyState";
 import { FxSettings } from "../components/FxSettings";
 import { LoadingState } from "../components/LoadingState";
 import { Panel } from "../components/Panel";
 import { PriceProviderSettings } from "../components/PriceProviderSettings";
 import { StatCard } from "../components/StatCard";
+import { StatusBadge } from "../components/StatusBadge";
 
-export function SettingsPage() {
+type SettingsPageProps = {
+  debugMode: boolean;
+  onToggleDebugMode: () => void;
+};
+
+export function SettingsPage({ debugMode, onToggleDebugMode }: SettingsPageProps) {
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [localAI, setLocalAI] = useState<LocalAIStatus | null>(null);
   const [localAIConfig, setLocalAIConfig] = useState<LocalAIConfig | null>(null);
@@ -32,7 +39,7 @@ export function SettingsPage() {
       setLocalAIConfig(aiConfig);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Nem sikerült betölteni az app infót.");
+      setError(err instanceof Error ? err.message : "Settings failed to load.");
     } finally {
       setLoading(false);
     }
@@ -51,139 +58,119 @@ export function SettingsPage() {
       setMessage(result.message);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Local AI kapcsolat teszt hiba.");
+      setError(err instanceof Error ? err.message : "Local AI connection test failed.");
     } finally {
       setBusy(false);
     }
   };
 
   const resetLocalData = async () => {
-    if (!window.confirm("Biztosan törlöd a lokális teszt adatokat?")) return;
+    if (!window.confirm("Reset local demo data?")) return;
     setBusy(true);
     setMessage(null);
     try {
       const result = await api.resetLocalData();
-      setMessage(`${result.message} Törölt sorok: ${Object.values(result.deleted).reduce((sum, value) => sum + value, 0)}.`);
+      setMessage(`${result.message} Deleted rows: ${Object.values(result.deleted).reduce((sum, value) => sum + value, 0)}.`);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Reset hiba.");
+      setError(err instanceof Error ? err.message : "Reset failed.");
     } finally {
       setBusy(false);
     }
   };
 
   const cleanupGeneratedMedia = async () => {
-    if (!window.confirm("Biztosan törlöd a generált media fájlokat? Az originals mappa megmarad.")) return;
+    if (!window.confirm("Delete generated media files? Originals will be kept.")) return;
     setBusy(true);
     setMessage(null);
     try {
       const result = await api.cleanupGeneratedMedia();
-      setMessage(`${result.message} Törölt fájlok: ${result.deleted_files}.`);
+      setMessage(`${result.message} Deleted files: ${result.deleted_files}.`);
       setError(null);
     } catch (err) {
-      setError(err instanceof Error ? err.message : "Media cleanup hiba.");
+      setError(err instanceof Error ? err.message : "Media cleanup failed.");
     } finally {
       setBusy(false);
     }
   };
 
-  if (loading) return <LoadingState label="App info betöltése..." />;
+  if (loading) return <LoadingState label="Loading settings..." />;
 
   return (
     <div className="space-y-5">
-      <div>
-        <p className="text-xs font-semibold uppercase tracking-wide text-blue-300">Local runtime</p>
-        <h2 className="mt-1 text-2xl font-semibold text-slate-50">Beállítások</h2>
-        <p className="mt-1 text-sm text-slate-400">Lokális MVP állapot, Local AI státusz és fejlesztői segédeszközök.</p>
-      </div>
-
-      {message && <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/10 p-3 text-sm text-emerald-200">{message}</div>}
-      {error && <div className="rounded-lg border border-rose-500/30 bg-rose-500/10 p-3 text-sm text-rose-200">{error}</div>}
+      {message && <div className="rounded-2xl border border-emerald-400/30 bg-emerald-500/10 p-3 text-sm text-emerald-100">{message}</div>}
+      {error && <div className="rounded-2xl border border-rose-400/30 bg-rose-500/10 p-3 text-sm text-rose-100">{error}</div>}
 
       {appInfo ? (
-        <Panel title={appInfo.name} subtitle="A frontend ezt a lokális backend app info endpointból olvassa.">
+        <Panel title={appInfo.name} subtitle="Read-only runtime overview. Values are loaded from the local backend.">
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <StatCard label="Mód" value="Local-only mód" tone="good" />
-            <StatCard label="Külső API" value={appInfo.external_apis_enabled ? "bekapcsolva" : "kikapcsolva"} tone={appInfo.external_apis_enabled ? "warn" : "good"} />
-            <StatCard label="Local AI" value={appInfo.local_ai_enabled ? "bekapcsolva" : "még nincs bekapcsolva"} tone={appInfo.local_ai_enabled ? "good" : "warn"} />
-            <StatCard label="Adatbázis" value={`${appInfo.database.toUpperCase()} adatbázis`} />
+            <StatCard label="Mode" value="Local only" tone="good" />
+            <StatCard label="External APIs" value={appInfo.external_apis_enabled ? "enabled" : "disabled"} tone={appInfo.external_apis_enabled ? "warn" : "good"} />
+            <StatCard label="Local AI" value={appInfo.local_ai_enabled ? "enabled" : "disabled"} tone={appInfo.local_ai_enabled ? "good" : "warn"} />
+            <StatCard label="Database" value={appInfo.database.toUpperCase()} />
           </div>
         </Panel>
       ) : (
-        <EmptyState label="App info nem érhető el." />
+        <EmptyState label="App info is unavailable." />
       )}
 
       {localAI && (
-        <Panel title="Local AI státusz" subtitle="Server-local LM Studio vagy Tailscale remote worker mód. Nincs API kulcs és nincs külső AI hívás.">
+        <Panel
+          title="Local AI"
+          subtitle="LM Studio can run server-local or through the Windows worker. Editing is still done in .env files, then the backend should be restarted."
+          action={
+            <div className="flex flex-wrap gap-2">
+              <ActionButton disabled={busy} onClick={testLocalAIConnection}>
+                <RefreshCw size={16} />
+                Test connection
+              </ActionButton>
+              <ActionButton tone="warning" onClick={onToggleDebugMode}>
+                <Bug size={16} />
+                {debugMode ? "Developer mode on" : "Developer mode off"}
+              </ActionButton>
+            </div>
+          }
+        >
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-            <StatCard label="Mód" value={localAI.mode} tone={localAI.enabled ? "good" : "warn"} />
-            <StatCard label="Enabled" value={localAI.enabled ? "igen" : "nem"} tone={localAI.enabled ? "good" : "warn"} />
+            <StatCard label="Mode" value={localAI.mode} tone={localAI.enabled ? "good" : "warn"} />
+            <StatCard label="Enabled" value={localAI.enabled ? "yes" : "no"} tone={localAI.enabled ? "good" : "warn"} />
             <StatCard label="Provider" value={localAI.provider} />
+            <StatCard label="Model" value={localAI.model_name || "-"} />
             <StatCard label="Base URL" value={localAI.base_url} />
             <StatCard label="Worker URL" value={localAI.worker_base_url || "-"} />
-            <StatCard label="Model" value={localAI.model_name || "-"} />
             <StatCard label="Timeout" value={`${localAIConfig?.timeout_seconds ?? "-"}s`} />
             <StatCard label="Max images" value={localAIConfig?.max_images ?? "-"} />
             <StatCard label="Max tokens" value={localAIConfig?.max_tokens ?? "-"} />
-            <StatCard label="Disable thinking" value={localAIConfig?.disable_thinking ? "igen" : "nem"} tone={localAIConfig?.disable_thinking ? "good" : "warn"} />
-            <StatCard label="Localhost" value={localAI.is_localhost ? "igen" : "nem"} tone={localAI.mode === "server_local" ? (localAI.is_localhost ? "good" : "bad") : undefined} />
-            <StatCard label="Reachable" value={localAI.reachable ? "igen" : "nem"} tone={localAI.reachable ? "good" : "warn"} />
-            <StatCard label="Worker" value={localAI.worker_reachable ? "elérhető" : "nem elérhető"} tone={localAI.worker_reachable ? "good" : "warn"} />
-            <StatCard label="Vision" value={localAI.vision_capable} />
-            <StatCard label="Szerver szerep" value={localAI.server_role || localAIConfig?.server_role || "-"} />
-            <StatCard label="Kliens szerep" value={localAI.client_role || localAIConfig?.client_role || "-"} />
+            <StatCard label="Disable thinking" value={localAIConfig?.disable_thinking ? "yes" : "no"} tone={localAIConfig?.disable_thinking ? "good" : "warn"} />
+            <StatCard label="Reachable" value={localAI.reachable ? "yes" : "no"} tone={localAI.reachable ? "good" : "warn"} />
+            <StatCard label="Worker" value={localAI.worker_reachable ? "reachable" : "not reachable"} tone={localAI.worker_reachable ? "good" : "warn"} />
           </div>
-          <p className="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-sm text-slate-300">{localAI.message}</p>
-          <p className="mt-3 text-sm text-slate-400">Az értékeket jelenleg .env fájlban kell beállítani, majd a backendet újraindítani.</p>
-          <p className="mt-2 text-sm text-slate-400">
-            Dev módban használd a LOCAL_AI_MODE=server_local és LOCAL_AI_BASE_URL=http://127.0.0.1:1234/v1 beállítást. Szerverre költöztetésnél
-            LOCAL_AI_MODE=remote_worker és LOCAL_AI_WORKER_BASE_URL mutat majd a gamer PC Tailscale címére.
-          </p>
-          <p className="mt-2 text-sm text-slate-400">
-            A modellváltáshoz módosítsd a backend/.env LOCAL_AI_MODEL_NAME értékét a model listában látott pontos model id-re, majd indítsd újra a backendet.
-          </p>
-          <p className="mt-2 text-sm text-slate-400">
-            Qwen modelleknél LM Studio-ban kapcsold ki az Enable Thinking opciót, vagy használd a LOCAL_AI_DISABLE_THINKING=true beállítást.
-          </p>
-          <div className="mt-4 flex flex-wrap gap-3">
-            <button
-              className="inline-flex items-center justify-center gap-2 rounded-lg border border-blue-500/40 bg-blue-500/10 px-4 py-2 text-sm font-medium text-blue-100 hover:bg-blue-500/20 disabled:opacity-60"
-              disabled={busy}
-              onClick={testLocalAIConnection}
-              type="button"
-            >
-              <RefreshCw size={16} />
-              Local AI kapcsolat tesztelése
-            </button>
-            <button className="inline-flex items-center justify-center gap-2 rounded-lg border border-slate-700 px-4 py-2 text-sm font-medium text-slate-300 opacity-60" disabled type="button">
-              Konfiguráció frissítése
-            </button>
+          <div className="mt-4 rounded-2xl border border-white/10 bg-white/[0.035] p-3 text-sm leading-6 text-slate-300">{localAI.message}</div>
+          <div className="mt-4 flex flex-wrap gap-2">
+            <StatusBadge tone="info">AI_MODEL_NAME / LOCAL_AI_MODEL_NAME</StatusBadge>
+            <StatusBadge tone="info">AI_MAX_CONTEXT_TOKENS</StatusBadge>
+            <StatusBadge tone="info">AI_PHASE_A_MAX_OUTPUT_TOKENS</StatusBadge>
+            <StatusBadge tone="info">AI_PHASE_B_MAX_OUTPUT_TOKENS</StatusBadge>
+            <StatusBadge tone="info">SEND_DIAGNOSTIC_IMAGES_TO_AI</StatusBadge>
+            <StatusBadge tone="info">ENABLE_IMAGE_PREPROCESSING</StatusBadge>
+            <StatusBadge tone="info">ENABLE_TWO_PHASE_AI_GRADING</StatusBadge>
           </div>
+
           {connectionTest && (
-            <div className="mt-4 rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-sm text-slate-300">
-              <div className="font-medium text-slate-100">Kapcsolat teszt: {connectionTest.ok ? "OK" : "nem OK"}</div>
-              <div className="mt-1">Mód: {connectionTest.mode || localAI.mode}</div>
-              <div className="mt-1">Reachable: {connectionTest.reachable ? "igen" : "nem"}</div>
-              <div className="mt-1">Worker reachable: {connectionTest.worker_reachable ? "igen" : "nem"}</div>
+            <div className="mt-4 rounded-2xl border border-white/10 bg-slate-950/35 p-4 text-sm text-slate-300">
+              <div className="font-semibold text-slate-100">Connection test: {connectionTest.ok ? "OK" : "not OK"}</div>
               <div className="mt-1">Selected model: {connectionTest.selected_model || "-"}</div>
-              <div className={connectionTest.selected_model_found ? "mt-1 text-emerald-200" : "mt-1 text-amber-200"}>
-                Selected model loaded: {connectionTest.selected_model_found ? "igen" : "nem"}
-              </div>
+              <div className="mt-1">Selected model loaded: {connectionTest.selected_model_found ? "yes" : "no"}</div>
               <div className="mt-1">{connectionTest.message}</div>
-              {!connectionTest.selected_model_found && connectionTest.reachable && (
-                <div className="mt-3 rounded-lg border border-amber-500/30 bg-amber-500/10 p-2 text-amber-100">
-                  A beállított modell nincs a LM Studio model listában. Másold ki a pontos id-t a listából, írd be a backend/.env fájlba, majd indítsd újra a backendet.
-                </div>
-              )}
-              <div className="mt-3 text-xs font-semibold uppercase tracking-wide text-slate-500">Modellek</div>
-              {connectionTest.models.length === 0 ? (
-                <div className="mt-1 text-slate-500">Nincs modell lista.</div>
-              ) : (
-                <ul className="mt-2 max-h-40 space-y-1 overflow-auto">
-                  {connectionTest.models.map((model) => (
-                    <li key={model} className="rounded bg-slate-900 px-2 py-1">{model}</li>
-                  ))}
-                </ul>
+              {debugMode && connectionTest.models.length > 0 && (
+                <details className="mt-3">
+                  <summary className="cursor-pointer text-xs font-semibold uppercase text-slate-500">Loaded model list</summary>
+                  <ul className="mt-2 max-h-48 space-y-1 overflow-auto">
+                    {connectionTest.models.map((model) => (
+                      <li key={model} className="rounded-lg bg-slate-900 px-2 py-1 text-xs">{model}</li>
+                    ))}
+                  </ul>
+                </details>
               )}
             </div>
           )}
@@ -191,31 +178,22 @@ export function SettingsPage() {
       )}
 
       <PriceProviderSettings />
-
       <FxSettings />
 
-      <Panel title="Fejlesztői demo műveletek" subtitle="Csak lokális, single-user MVP használatra. Az originals media mappát egyik művelet sem törli.">
-        <div className="grid gap-3 md:grid-cols-2">
-          <button
-            className="inline-flex items-center justify-center gap-2 rounded-lg border border-rose-500/40 bg-rose-500/10 px-4 py-3 text-sm font-medium text-rose-100 hover:bg-rose-500/20 disabled:opacity-60"
-            disabled={busy}
-            onClick={resetLocalData}
-            type="button"
-          >
-            <Trash2 size={16} />
-            Reset demo data
-          </button>
-          <button
-            className="inline-flex items-center justify-center gap-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm font-medium text-amber-100 hover:bg-amber-500/20 disabled:opacity-60"
-            disabled={busy}
-            onClick={cleanupGeneratedMedia}
-            type="button"
-          >
-            <RefreshCw size={16} />
-            Cleanup generated media
-          </button>
-        </div>
-      </Panel>
+      {debugMode && (
+        <Panel title="Developer maintenance" subtitle="Local single-user MVP actions. Originals are kept by generated media cleanup.">
+          <div className="grid gap-3 md:grid-cols-2">
+            <ActionButton tone="danger" disabled={busy} onClick={resetLocalData}>
+              <Trash2 size={16} />
+              Reset demo data
+            </ActionButton>
+            <ActionButton tone="warning" disabled={busy} onClick={cleanupGeneratedMedia}>
+              <RefreshCw size={16} />
+              Cleanup generated media
+            </ActionButton>
+          </div>
+        </Panel>
+      )}
     </div>
   );
 }

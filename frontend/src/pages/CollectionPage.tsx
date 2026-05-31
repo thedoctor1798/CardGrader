@@ -1,4 +1,4 @@
-import { ImagePlus, Play, Plus, RefreshCw, Upload, X } from "lucide-react";
+import { Grid2X2, ImagePlus, List, Play, Plus, RefreshCw, Search, SlidersHorizontal, Upload, X } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useState } from "react";
 import type { ReactNode } from "react";
 import { api, mediaUrl } from "../api/client";
@@ -12,6 +12,7 @@ const statuses = ["raw_owned", "graded_owned", "sent_to_grading", "listed_for_sa
 const sources = ["pack", "blister", "single_purchase", "trade", "unknown"];
 
 type CollectionPageProps = {
+  mode?: "browse" | "add";
   onOpenOwnedCard: (id: number) => void;
 };
 
@@ -86,13 +87,19 @@ function Field({ label, children }: { label: string; children: ReactNode }) {
   );
 }
 
-export function CollectionPage({ onOpenOwnedCard }: CollectionPageProps) {
+export function CollectionPage({ mode = "browse", onOpenOwnedCard }: CollectionPageProps) {
   const [items, setItems] = useState<OwnedCardWithCard[]>([]);
   const [cards, setCards] = useState<Card[]>([]);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [showImageAdd, setShowImageAdd] = useState(false);
+  const [showFilters, setShowFilters] = useState(false);
+  const [query, setQuery] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [priceFilter, setPriceFilter] = useState("all");
+  const [sortMode, setSortMode] = useState("updated_desc");
+  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [existingCardId, setExistingCardId] = useState<number | null>(null);
   const [cardForm, setCardForm] = useState<CardForm>(emptyCardForm);
   const [copyForm, setCopyForm] = useState<CopyForm>(emptyCopyForm);
@@ -134,6 +141,50 @@ export function CollectionPage({ onOpenOwnedCard }: CollectionPageProps) {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (mode === "add") {
+      setShowImageAdd(true);
+    }
+  }, [mode]);
+
+  const statusOptions = useMemo(
+    () => Array.from(new Set(items.map((item) => item.status).filter(Boolean) as string[])).sort(),
+    [items],
+  );
+
+  const filteredItems = useMemo(() => {
+    const normalizedQuery = query.trim().toLowerCase();
+    const matchesQuery = (item: OwnedCardWithCard) => {
+      if (!normalizedQuery) return true;
+      const haystack = [
+        item.card?.name,
+        item.card?.set_name,
+        item.card?.set_code,
+        item.card?.card_number,
+        item.card?.rarity,
+        item.copy_label,
+        item.status,
+        item.storage_location,
+      ].filter(Boolean).join(" ").toLowerCase();
+      return haystack.includes(normalizedQuery);
+    };
+    const matchesStatus = (item: OwnedCardWithCard) => statusFilter === "all" || item.status === statusFilter;
+    const matchesPrice = (item: OwnedCardWithCard) =>
+      priceFilter === "all" ||
+      (priceFilter === "priced" && item.latest_raw_price_huf !== null && item.latest_raw_price_huf !== undefined) ||
+      (priceFilter === "missing_price" && (item.latest_raw_price_huf === null || item.latest_raw_price_huf === undefined));
+
+    return items
+      .filter((item) => matchesQuery(item) && matchesStatus(item) && matchesPrice(item))
+      .slice()
+      .sort((a, b) => {
+        if (sortMode === "name_asc") return (a.card?.name ?? "").localeCompare(b.card?.name ?? "");
+        if (sortMode === "value_desc") return (b.latest_raw_price_huf ?? -1) - (a.latest_raw_price_huf ?? -1);
+        if (sortMode === "acquired_desc") return new Date(b.acquired_at ?? b.created_at ?? 0).getTime() - new Date(a.acquired_at ?? a.created_at ?? 0).getTime();
+        return new Date(b.updated_at ?? b.created_at ?? 0).getTime() - new Date(a.updated_at ?? a.created_at ?? 0).getTime();
+      });
+  }, [items, priceFilter, query, sortMode, statusFilter]);
 
   const likelyDuplicate = useMemo(() => {
     const name = cardForm.name.trim().toLowerCase();
@@ -476,6 +527,75 @@ export function CollectionPage({ onOpenOwnedCard }: CollectionPageProps) {
         </button>
       </details>
 
+      <div className="mb-5 space-y-3 rounded-2xl border border-white/10 bg-white/[0.035] p-3">
+        <div className="grid gap-3 lg:grid-cols-[minmax(0,1fr)_auto_auto]">
+          <label className="relative block">
+            <Search className="pointer-events-none absolute left-3 top-1/2 -translate-y-1/2 text-slate-500" size={18} />
+            <input
+              className="min-h-11 w-full rounded-xl border border-white/10 bg-slate-950/50 pl-10 pr-3 text-sm text-slate-100 placeholder:text-slate-500"
+              placeholder="Search by name, set, number, rarity, status..."
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+            />
+          </label>
+          <button
+            className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl border border-white/10 bg-white/[0.055] px-3 text-sm font-medium text-slate-100 hover:bg-white/[0.09]"
+            onClick={() => setShowFilters((current) => !current)}
+            type="button"
+          >
+            <SlidersHorizontal size={16} />
+            Filters
+          </button>
+          <div className="grid grid-cols-2 gap-1 rounded-xl border border-white/10 bg-slate-950/40 p-1">
+            <button
+              className={`inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg text-sm ${viewMode === "grid" ? "bg-white text-slate-950" : "text-slate-300 hover:bg-white/10"}`}
+              onClick={() => setViewMode("grid")}
+              type="button"
+            >
+              <Grid2X2 size={16} />
+              Grid
+            </button>
+            <button
+              className={`inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg text-sm ${viewMode === "list" ? "bg-white text-slate-950" : "text-slate-300 hover:bg-white/10"}`}
+              onClick={() => setViewMode("list")}
+              type="button"
+            >
+              <List size={16} />
+              List
+            </button>
+          </div>
+        </div>
+        {showFilters && (
+          <div className="grid gap-3 md:grid-cols-3">
+            <Field label="Status">
+              <select className="w-full rounded-xl border border-white/10 bg-slate-950/50 px-3 py-2.5 text-slate-100" value={statusFilter} onChange={(event) => setStatusFilter(event.target.value)}>
+                <option value="all">All statuses</option>
+                {statusOptions.map((status) => <option key={status} value={status}>{status}</option>)}
+              </select>
+            </Field>
+            <Field label="Price">
+              <select className="w-full rounded-xl border border-white/10 bg-slate-950/50 px-3 py-2.5 text-slate-100" value={priceFilter} onChange={(event) => setPriceFilter(event.target.value)}>
+                <option value="all">All cards</option>
+                <option value="priced">Price available</option>
+                <option value="missing_price">Missing price</option>
+              </select>
+            </Field>
+            <Field label="Sort">
+              <select className="w-full rounded-xl border border-white/10 bg-slate-950/50 px-3 py-2.5 text-slate-100" value={sortMode} onChange={(event) => setSortMode(event.target.value)}>
+                <option value="updated_desc">Recently updated</option>
+                <option value="acquired_desc">Recently acquired</option>
+                <option value="name_asc">Name A-Z</option>
+                <option value="value_desc">Highest value</option>
+              </select>
+            </Field>
+          </div>
+        )}
+        <div className="text-xs text-slate-500">
+          Showing {filteredItems.length} of {items.length} owned cards.
+        </div>
+      </div>
+
       {showCreate && (
         <div className="mb-5 rounded-xl border border-slate-800 bg-slate-950/35 p-4">
           <div className="mb-4 flex items-center justify-between gap-3">
@@ -535,9 +655,44 @@ export function CollectionPage({ onOpenOwnedCard }: CollectionPageProps) {
 
       {items.length === 0 ? (
         <EmptyState label="Még nincs owned card rekord. Hozzáadhatsz saját kártyát vagy létrehozhatod a Rowlet demót." />
+      ) : filteredItems.length === 0 ? (
+        <EmptyState label="No cards match the current search and filters." />
+      ) : viewMode === "grid" ? (
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4">
+          {filteredItems.map((item) => (
+            <button
+              key={item.id}
+              className="group rounded-2xl border border-white/10 bg-white/[0.04] p-4 text-left transition hover:-translate-y-0.5 hover:border-blue-300/35 hover:bg-white/[0.07]"
+              onClick={() => onOpenOwnedCard(item.id)}
+              type="button"
+            >
+              <div className="flex items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <div className="truncate text-base font-semibold text-slate-50">{item.card?.name ?? `Card #${item.card_id}`}</div>
+                  <div className="mt-1 truncate text-sm text-slate-400">{[item.card?.set_name, item.card?.set_code, item.card?.card_number].filter(Boolean).join(" / ") || "No set data"}</div>
+                </div>
+                <span className="shrink-0 rounded-full border border-white/10 bg-slate-950/45 px-2 py-1 text-xs text-slate-300">{item.status ?? "-"}</span>
+              </div>
+              <div className="mt-4 grid grid-cols-2 gap-2 text-xs text-slate-400">
+                <div className="rounded-xl bg-slate-950/35 p-3">
+                  <div className="uppercase text-slate-500">Acquired</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-100">{formatHuf(item.acquired_price_huf)}</div>
+                </div>
+                <div className="rounded-xl bg-slate-950/35 p-3">
+                  <div className="uppercase text-slate-500">Latest value</div>
+                  <div className="mt-1 text-sm font-semibold text-slate-100">{item.latest_raw_price_huf === null || item.latest_raw_price_huf === undefined ? "No price" : formatHuf(item.latest_raw_price_huf)}</div>
+                </div>
+              </div>
+              <div className="mt-4 flex items-center justify-between gap-3 text-xs text-slate-500">
+                <span className="truncate">{item.copy_label || item.storage_location || "Owned copy"}</span>
+                <span className="text-blue-200 group-hover:text-blue-100">Open</span>
+              </div>
+            </button>
+          ))}
+        </div>
       ) : (
-        <div className="overflow-hidden rounded-xl border border-slate-800">
-          <table className="min-w-full divide-y divide-slate-800 text-sm">
+        <div className="overflow-x-auto rounded-xl border border-slate-800">
+          <table className="min-w-[860px] w-full divide-y divide-slate-800 text-sm">
             <thead className="bg-slate-950/35 text-left text-xs uppercase tracking-wide text-slate-500">
               <tr>
                 <th className="px-4 py-3">Kártya</th>
@@ -551,7 +706,7 @@ export function CollectionPage({ onOpenOwnedCard }: CollectionPageProps) {
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-800 bg-charcoal-850">
-              {items.map((item) => (
+              {filteredItems.map((item) => (
                 <tr key={item.id} className="transition hover:bg-slate-800/40">
                   <td className="px-4 py-4 font-medium text-slate-100">{item.card?.name ?? `Card #${item.card_id}`}</td>
                   <td className="px-4 py-4 text-slate-300">{item.card?.set_name ?? "-"}</td>
