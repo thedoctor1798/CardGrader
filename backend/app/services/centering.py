@@ -296,7 +296,55 @@ def _edge_position(projection: np.ndarray, start: int, stop: int) -> tuple[int, 
     return index, score
 
 
-def _inner_border_edges(image: np.ndarray) -> tuple[int, int, int, int, float, list[str]]:
+def _candidate_horizontal_lines(
+    gray: np.ndarray,
+    edges: np.ndarray,
+    left: int,
+    right: int,
+    start: int,
+    stop: int,
+    expected_y: int,
+) -> list[dict]:
+    height, width = gray.shape[:2]
+    x0 = max(0, min(width - 2, left + int(width * 0.015)))
+    x1 = max(x0 + 20, min(width - 1, right - int(width * 0.015)))
+    span = max(1, x1 - x0)
+    rows: list[dict] = []
+    for y in range(max(2, start), min(height - 3, stop)):
+        band = edges[y - 2 : y + 3, x0:x1]
+        columns_hit = np.count_nonzero(band.max(axis=0))
+        continuity = columns_hit / span
+        if continuity < 0.12:
+            continue
+        upper = gray[max(0, y - 5) : y - 1, x0:x1]
+        lower = gray[y + 1 : min(height, y + 5), x0:x1]
+        contrast = abs(float(np.mean(upper)) - float(np.mean(lower))) / 80.0 if upper.size and lower.size else 0.0
+        left_anchor = np.count_nonzero(edges[y - 3 : y + 4, max(0, x0 - 18) : min(width, x0 + 42)]) / max(1, 7 * 60)
+        right_anchor = np.count_nonzero(edges[y - 3 : y + 4, max(0, x1 - 42) : min(width, x1 + 18)]) / max(1, 7 * 60)
+        expected = 1.0 - min(1.0, abs(y - expected_y) / max(1, stop - start))
+        outer_distance = min(1.0, max(0.0, min(y, height - 1 - y) / (height * 0.08)))
+        score = (continuity * 0.42) + (min(1.0, contrast) * 0.18) + (expected * 0.22) + (min(1.0, left_anchor + right_anchor) * 0.12) + (outer_distance * 0.06)
+        rows.append(
+            {
+                "position": int(y),
+                "score": round(float(score), 4),
+                "continuity": round(float(continuity), 4),
+                "contrast": round(float(contrast), 4),
+                "anchor": round(float(left_anchor + right_anchor), 4),
+            }
+        )
+    rows.sort(key=lambda item: item["score"], reverse=True)
+    return rows[:10]
+
+
+def _select_horizontal_candidate(candidates: list[dict], min_score: float = 0.32, min_continuity: float = 0.22) -> tuple[int | None, float]:
+    for candidate in candidates:
+        if candidate["score"] >= min_score and candidate["continuity"] >= min_continuity:
+            return int(candidate["position"]), float(candidate["score"])
+    return None, float(candidates[0]["score"]) if candidates else 0.0
+
+
+def _inner_border_edges(image: np.ndarray, side: str = "front", layout_profile: str | None = None) -> tuple[int, int, int, int, float, list[str], dict]:
     warnings: list[str] = []
     height, width = image.shape[:2]
     gray = cv2.cvtColor(image, cv2.COLOR_BGR2GRAY)
@@ -306,30 +354,62 @@ def _inner_border_edges(image: np.ndarray) -> tuple[int, int, int, int, float, l
     y0, y1 = int(height * 0.08), int(height * 0.92)
     x0, x1 = int(width * 0.08), int(width * 0.92)
     vertical_projection = edges[y0:y1, :].sum(axis=0).astype("float32")
-    horizontal_projection = edges[:, x0:x1].sum(axis=1).astype("float32")
 
     left, left_score = _edge_position(vertical_projection, int(width * 0.04), int(width * 0.32))
     right, right_score = _edge_position(vertical_projection, int(width * 0.68), int(width * 0.96))
-    top, top_score = _edge_position(horizontal_projection, int(height * 0.04), int(height * 0.32))
-    bottom, bottom_score = _edge_position(horizontal_projection, int(height * 0.68), int(height * 0.96))
 
     expected_left = int(width * 0.08)
     expected_right = int(width * 0.92)
-    expected_top = int(height * 0.08)
-    expected_bottom = int(height * 0.92)
-    score_values = [left_score, right_score, top_score, bottom_score]
-    median_score = float(np.median(score_values)) if score_values else 0.0
-    confidence = min(0.9, median_score / max(1.0, height * 255 * 0.018))
+    if right <= left:
+        warnings.append("vertical inner border detection uncertain; used proportional vertical guides")
+        left, right = expected_left, expected_right
+    profile = layout_profile or ("pokemon_front" if side == "front" else "pokemon_back" if side == "back" else "generic")
+    if profile == "pokemon_front":
+        top_zone = (int(height * 0.05), int(height * 0.25))
+        bottom_zone = (int(height * 0.75), int(height * 0.98))
+        expected_top = int(height * 0.065)
+        expected_bottom = int(height * 0.94)
+    else:
+        top_zone = (int(height * 0.04), int(height * 0.28))
+        bottom_zone = (int(height * 0.72), int(height * 0.97))
+        expected_top = int(height * 0.08)
+        expected_bottom = int(height * 0.92)
 
-    if right <= left or bottom <= top or confidence < 0.18:
+    top_candidates = _candidate_horizontal_lines(clahe, edges, left, right, top_zone[0], top_zone[1], expected_top)
+    bottom_candidates = _candidate_horizontal_lines(clahe, edges, left, right, bottom_zone[0], bottom_zone[1], expected_bottom)
+    top, top_score = _select_horizontal_candidate(top_candidates)
+    bottom, bottom_score = _select_horizontal_candidate(bottom_candidates)
+    horizontal_fallback = False
+    if top is None:
+        top = expected_top
+        horizontal_fallback = True
+    if bottom is None:
+        bottom = expected_bottom
+        horizontal_fallback = True
+    if horizontal_fallback:
+        warnings.append("Top/bottom inner frame detection uncertain")
+
+    vertical_confidence = min(0.9, float(np.median([left_score, right_score])) / max(1.0, height * 255 * 0.018))
+    horizontal_confidence = min(0.9, float(np.median([top_score, bottom_score])) if top_score or bottom_score else 0.16)
+    confidence = min(vertical_confidence, horizontal_confidence)
+    if horizontal_fallback:
+        confidence = min(confidence, 0.35)
+    if confidence < 0.18:
         warnings.append("inner border edge confidence low; used conservative fallback guides")
-        left, right, top, bottom = expected_left, expected_right, expected_top, expected_bottom
         confidence = 0.18
 
-    return left, right, top, bottom, round(float(confidence), 2), warnings
+    debug = {
+        "layout_profile": profile,
+        "outer_card_boundary": {"left": 0, "right": width - 1, "top": 0, "bottom": height - 1},
+        "inner_art_frame_boundary": {"left": int(left), "right": int(right), "top": int(top), "bottom": int(bottom)},
+        "horizontal_candidates": {"top": top_candidates[:5], "bottom": bottom_candidates[:5]},
+        "horizontal_fallback": horizontal_fallback,
+        "search_zones": {"top": top_zone, "bottom": bottom_zone},
+    }
+    return left, right, int(top), int(bottom), round(float(confidence), 2), warnings, debug
 
 
-def calculate_centering_from_warped_card(image: np.ndarray) -> dict:
+def calculate_centering_from_warped_card(image: np.ndarray, side: str = "front", layout_profile: str | None = None) -> dict:
     if image is None or image.size == 0:
         return {
             "detected": False,
@@ -338,7 +418,7 @@ def calculate_centering_from_warped_card(image: np.ndarray) -> dict:
         }
 
     height, width = image.shape[:2]
-    left, right, top, bottom, confidence, warnings = _inner_border_edges(image)
+    left, right, top, bottom, confidence, warnings, debug = _inner_border_edges(image, side=side, layout_profile=layout_profile)
     left_border = max(0, left)
     right_border = max(0, width - 1 - right)
     top_border = max(0, top)
@@ -371,6 +451,13 @@ def calculate_centering_from_warped_card(image: np.ndarray) -> dict:
         "inner_right_px": int(right),
         "inner_top_px": int(top),
         "inner_bottom_px": int(bottom),
+        "outer_card_boundary": debug["outer_card_boundary"],
+        "inner_art_frame_boundary": debug["inner_art_frame_boundary"],
+        "auto_inner_frame": debug["inner_art_frame_boundary"],
+        "manual_inner_frame": None,
+        "final_inner_frame": debug["inner_art_frame_boundary"],
+        "layout_profile": debug["layout_profile"],
+        "debug_candidates": debug,
         "warnings": warnings,
     }
 
@@ -383,6 +470,7 @@ def draw_centering_debug(
     debug = perspective_image.copy()
     height, width = debug.shape[:2]
     cv2.rectangle(debug, (0, 0), (width - 1, height - 1), (0, 255, 0), 4)
+    cv2.putText(debug, "outer boundary", (20, height - 22), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (0, 255, 0), 2)
     for point in [(0, 0), (width - 1, 0), (width - 1, height - 1), (0, height - 1)]:
         cv2.circle(debug, point, 12, (0, 180, 255), -1)
 
@@ -391,11 +479,17 @@ def draw_centering_debug(
         right = int(centering.get("inner_right_px", width - 1))
         top = int(centering.get("inner_top_px", 0))
         bottom = int(centering.get("inner_bottom_px", height - 1))
-        cv2.line(debug, (left, 0), (left, height), (255, 120, 0), 3)
-        cv2.line(debug, (right, 0), (right, height), (255, 120, 0), 3)
-        cv2.line(debug, (0, top), (width, top), (255, 120, 0), 3)
-        cv2.line(debug, (0, bottom), (width, bottom), (255, 120, 0), 3)
-        cv2.rectangle(debug, (left, top), (right, bottom), (255, 200, 0), 2)
+        candidates = centering.get("debug_candidates", {}).get("horizontal_candidates", {})
+        for candidate in candidates.get("top", []) + candidates.get("bottom", []):
+            y = int(candidate.get("position", 0))
+            color = (0, 220, 255) if candidate.get("score", 0) >= 0.32 else (60, 60, 220)
+            cv2.line(debug, (left, y), (right, y), color, 1)
+        cv2.rectangle(debug, (left, top), (right, bottom), (255, 255, 0), 3)
+        cv2.putText(debug, "inner frame", (left + 10, max(28, top - 12)), cv2.FONT_HERSHEY_SIMPLEX, 0.72, (255, 255, 0), 2)
+        cv2.line(debug, (left, 0), (left, height), (255, 120, 0), 2)
+        cv2.line(debug, (right, 0), (right, height), (255, 120, 0), 2)
+        cv2.line(debug, (0, top), (width, top), (255, 120, 0), 2)
+        cv2.line(debug, (0, bottom), (width, bottom), (255, 120, 0), 2)
 
     lines = [
         f"boundary: {boundary.get('boundary_source', 'auto')} conf={boundary.get('confidence', 0)}",

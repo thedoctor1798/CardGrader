@@ -320,7 +320,8 @@ def preprocess_side(
             perspective = cv2.resize(normalized, (1000, 1400), interpolation=cv2.INTER_AREA)
         write_image(generated_paths["perspective_corrected"], perspective)
 
-        centering = calculate_centering_from_warped_card(perspective) if ENABLE_CENTERING_DETECTION else {
+        layout_profile = "pokemon_front" if side == "front" else "pokemon_back" if side == "back" else "generic"
+        centering = calculate_centering_from_warped_card(perspective, side=side, layout_profile=layout_profile) if ENABLE_CENTERING_DETECTION else {
             "detected": False,
             "confidence": 0.0,
             "warnings": ["centering calculation disabled"],
