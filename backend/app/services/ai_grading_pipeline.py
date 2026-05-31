@@ -359,6 +359,20 @@ Diagnostic processed images may exaggerate texture, reflections, print patterns,
 Use them as defect discovery aids, not absolute proof.
 When possible, confirm important defects against the original image.
 Centering should primarily follow the deterministic OpenCV centering JSON.
+All score fields must be numeric. Use a 1.0 to 10.0 grading scale.
+Do not put "NM", "Mint", "PSA 9", or text inside score fields.
+Put text labels only into label fields.
+If uncertain, provide the best numeric estimate and lower confidence.
+Overall score should be a numeric estimate, not a condition label.
+
+IMPORTANT NUMERIC OUTPUT RULES:
+- overall_score must be a number, example: 8.5
+- confidence must be a number between 0 and 1
+- subgrades.centering.score must be a number
+- subgrades.corners.score must be a number
+- subgrades.edges.score must be a number
+- subgrades.surface.score must be a number
+- textual conditions like NM, Mint, Near Mint, Gem Mint must only appear in label fields
 
 Focus on:
 - surface scratches
@@ -385,14 +399,35 @@ Deterministic preprocessing and centering data:
 Return JSON only:
 
 {{
-  "estimated_grade": "",
-  "grade_range": "",
+  "overall_score": 9.0,
+  "estimated_grade_label": "Near Mint",
+  "grade_range": {{
+    "min": 9.0,
+    "max": 9.0,
+    "label": "9.0 - 9.0"
+  }},
   "confidence": 0.0,
   "subgrades": {{
-    "centering": "",
-    "corners": "",
-    "edges": "",
-    "surface": ""
+    "centering": {{
+      "score": 9.0,
+      "label": "Near Mint",
+      "reason": ""
+    }},
+    "corners": {{
+      "score": 9.0,
+      "label": "Near Mint",
+      "reason": ""
+    }},
+    "edges": {{
+      "score": 9.0,
+      "label": "Near Mint",
+      "reason": ""
+    }},
+    "surface": {{
+      "score": 9.0,
+      "label": "Near Mint",
+      "reason": ""
+    }}
   }},
   "surface_notes": "",
   "corner_notes": "",

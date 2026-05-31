@@ -314,6 +314,58 @@ function displayGrade(value?: number | string | null): string {
   return value;
 }
 
+function parseDisplayGradeScore(value?: number | string | { score?: number | string | null; label?: string | null } | null): number | null {
+  if (value === null || value === undefined || value === "") return null;
+  if (typeof value === "object") return parseDisplayGradeScore(value.score);
+  if (typeof value === "number") return Math.max(1, Math.min(10, value));
+  const match = value.replace(",", ".").match(/(?<!\d)(10(?:\.0)?|[0-9](?:\.[05])?)(?!\d)/);
+  if (match) return Math.max(1, Math.min(10, Number(match[1])));
+  const lowered = value.toLowerCase();
+  if (lowered.includes("gem") && lowered.includes("mint")) return 10;
+  if (lowered === "nm" || lowered.includes("near mint")) return 9;
+  if (lowered.includes("mint")) return 9.5;
+  if (lowered === "ex" || lowered.includes("excellent")) return 7;
+  if (lowered === "vg" || lowered.includes("very good")) return 5;
+  if (lowered.includes("good")) return 3;
+  if (lowered.includes("poor")) return 1;
+  return null;
+}
+
+function labelForGradeScore(score: number | null): string {
+  if (score === null) return "";
+  if (score >= 10) return "Gem Mint";
+  if (score >= 9.5) return "Mint";
+  if (score >= 9) return "Near Mint";
+  if (score >= 7) return "Excellent";
+  if (score >= 5) return "Very Good";
+  if (score >= 3) return "Good";
+  return "Poor";
+}
+
+function displaySubgrade(value?: number | string | { score?: number | string | null; label?: string | null } | null): string {
+  const score = parseDisplayGradeScore(value);
+  const label = typeof value === "object" && value?.label ? value.label : labelForGradeScore(score);
+  if (score === null) return "N/A";
+  return `${formatNumber(score)}${label ? ` ${label}` : ""}`;
+}
+
+function displayFinalGrade(final?: { overall_score?: number | null; estimated_grade?: string | null; estimated_grade_label?: string | null } | null): string {
+  const score = parseDisplayGradeScore(final?.overall_score ?? final?.estimated_grade);
+  if (score === null) return displayGrade(final?.estimated_grade);
+  return final?.estimated_grade_label ? `${formatNumber(score)} ${final.estimated_grade_label}` : formatNumber(score);
+}
+
+function displayGradeRangeValue(value?: string | { min?: number | string | null; max?: number | string | null; label?: string | null } | null): string {
+  if (!value) return "N/A";
+  if (typeof value === "object") {
+    if (value.label) return value.label;
+    const low = parseDisplayGradeScore(value.min);
+    const high = parseDisplayGradeScore(value.max);
+    return low !== null && high !== null ? `${formatNumber(low)} - ${formatNumber(high)}` : "N/A";
+  }
+  return value;
+}
+
 function aiWarningText(warning: string): string {
   if (warning === "model_reported_issue_for_unprovided_area" || warning === "invalid_issues_filtered") {
     return "A modell olyan területre jelzett hibát, amelyről nem kapott képet. Ez a jelzés el lett vetve.";
@@ -441,22 +493,22 @@ function SmartGradePanel({ pipeline, debugMode, onRetryPhaseB }: { pipeline: AIG
           <div className="mt-1 text-xs opacity-80">Two-step workflow status: {pipeline.status}</div>
         </div>
         <div className="text-right">
-          <div className="text-4xl font-semibold leading-none">{displayGrade(final?.estimated_grade)}</div>
+          <div className="text-4xl font-semibold leading-none">{displayFinalGrade(final)}</div>
           <div className="text-xs opacity-80">Final estimate</div>
         </div>
       </div>
       <div className="mt-4 grid gap-2 sm:grid-cols-2">
         <StatCard label="Visual + centering" value={phaseAFinished ? "Completed" : pipeline.phase_a_status ?? "Pending"} />
         <StatCard label="Surface + final grade" value={phaseBFinished ? "Completed" : pipeline.phase_b_status ?? "Pending"} />
-        <StatCard label="Range" value={displayGrade(final?.grade_range)} />
+        <StatCard label="Range" value={displayGradeRangeValue(final?.grade_range)} />
         <StatCard label="Confidence" value={final?.confidence !== undefined ? formatNumber(final.confidence, 2) : "-"} />
       </div>
       {final?.subgrades && (
         <div className="mt-3 grid grid-cols-2 gap-2">
-          <StatCard label="Centering" value={displayGrade(final.subgrades.centering)} />
-          <StatCard label="Corners" value={displayGrade(final.subgrades.corners)} />
-          <StatCard label="Edges" value={displayGrade(final.subgrades.edges)} />
-          <StatCard label="Surface" value={displayGrade(final.subgrades.surface)} />
+          <StatCard label="Centering" value={displaySubgrade(final.subgrades.centering)} />
+          <StatCard label="Corners" value={displaySubgrade(final.subgrades.corners)} />
+          <StatCard label="Edges" value={displaySubgrade(final.subgrades.edges)} />
+          <StatCard label="Surface" value={displaySubgrade(final.subgrades.surface)} />
         </div>
       )}
       {final?.reasoning_summary && <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-slate-100">{final.reasoning_summary}</div>}
@@ -476,12 +528,18 @@ function SmartGradePanel({ pipeline, debugMode, onRetryPhaseB }: { pipeline: AIG
           <RefreshCw size={16} /> Retry Phase B
         </button>
       )}
+      {debugMode && final?.parsing_warnings?.length ? (
+        <div className="mt-3 rounded-lg border border-amber-400/25 bg-amber-400/10 p-3 text-xs text-amber-100">
+          {final.parsing_warnings.map((warning) => <div key={warning}>{warning}</div>)}
+        </div>
+      ) : null}
       {debugMode && <details className="mt-3">
         <summary className="cursor-pointer text-xs font-semibold uppercase tracking-wide text-emerald-200">Developer details</summary>
         <pre className="mt-2 max-h-72 overflow-auto whitespace-pre-wrap rounded bg-slate-950/70 p-3 text-xs text-slate-200">{JSON.stringify({
           phase_a: pipeline.phase_a_result,
           final: pipeline.final_result,
           warnings: pipeline.warnings,
+          parsing_warnings: pipeline.final_result?.parsing_warnings,
           model_parameters: pipeline.model_parameters,
           error: pipeline.error_message,
         }, null, 2)}</pre>

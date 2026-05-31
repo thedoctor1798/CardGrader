@@ -890,14 +890,21 @@ export type PhaseAFinding = {
 export type FinalGradingResult = {
   overall_score?: number;
   estimated_grade?: string;
-  grade_range?: string;
+  estimated_grade_label?: string;
+  grade_range?: string | {
+    min?: number | string | null;
+    max?: number | string | null;
+    label?: string | null;
+  };
   confidence?: number;
   subgrades?: {
-    centering?: string;
-    corners?: string;
-    edges?: string;
-    surface?: string;
+    centering?: string | { score?: number | string | null; label?: string | null; reason?: string | null };
+    corners?: string | { score?: number | string | null; label?: string | null; reason?: string | null };
+    edges?: string | { score?: number | string | null; label?: string | null; reason?: string | null };
+    surface?: string | { score?: number | string | null; label?: string | null; reason?: string | null };
   };
+  parsed_subgrades?: Record<string, number | null>;
+  parsing_warnings?: string[];
   surface_notes?: string;
   corner_notes?: string;
   edge_notes?: string;

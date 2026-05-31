@@ -9,22 +9,34 @@ GRADE_NUMBER_RE = re.compile(r"(?<!\d)(10(?:\.0)?|[0-9](?:\.[05])?)(?!\d)")
 GRADE_RANGE_RE = re.compile(r"(?<!\d)(10(?:\.0)?|[0-9](?:\.[05])?)\s*(?:-|to)\s*(10(?:\.0)?|[0-9](?:\.[05])?)(?!\d)", re.IGNORECASE)
 
 TEXT_GRADE_DEFAULTS = [
-    (("gem", "mint"), 10.0),
-    (("pristine",), 10.0),
-    (("near", "mint"), 9.0),
-    (("nm",), 9.0),
-    (("mint",), 9.0),
-    (("excellent", "mint"), 7.0),
-    (("lightly", "played"), 6.0),
-    (("excellent",), 6.0),
-    (("very", "good"), 4.0),
-    (("good",), 3.0),
-    (("poor",), 1.0),
+    (("gem", "mint"), 10.0, "Gem Mint"),
+    (("pristine",), 10.0, "Gem Mint"),
+    (("near", "mint"), 9.0, "Near Mint"),
+    (("nm",), 9.0, "Near Mint"),
+    (("mint",), 9.5, "Mint"),
+    (("excellent", "mint"), 7.0, "Excellent"),
+    (("ex",), 7.0, "Excellent"),
+    (("excellent",), 7.0, "Excellent"),
+    (("lightly", "played"), 6.0, "Lightly Played"),
+    (("very", "good"), 5.0, "Very Good"),
+    (("vg",), 5.0, "Very Good"),
+    (("good",), 3.0, "Good"),
+    (("poor",), 1.0, "Poor"),
+]
+
+SCORE_LABELS = [
+    (10.0, "Gem Mint"),
+    (9.5, "Mint"),
+    (9.0, "Near Mint"),
+    (7.0, "Excellent"),
+    (5.0, "Very Good"),
+    (3.0, "Good"),
+    (1.0, "Poor"),
 ]
 
 
 def _clamp_grade(value: float) -> float | None:
-    if value < 0 or value > 10:
+    if value < 1 or value > 10:
         return None
     return round(value, 2)
 
@@ -38,6 +50,15 @@ def _stringify(value: Any) -> str:
         return json.dumps(value, ensure_ascii=False)
     except TypeError:
         return str(value)
+
+
+def label_for_score(score: float | None) -> str:
+    if score is None:
+        return ""
+    for threshold, label in SCORE_LABELS:
+        if score >= threshold:
+            return label
+    return "Poor"
 
 
 def parse_grade_value(value: Any) -> float | None:
@@ -60,10 +81,23 @@ def parse_grade_value(value: Any) -> float | None:
         return _clamp_grade(float(match.group(1)))
 
     lowered = text.lower()
-    for tokens, score in TEXT_GRADE_DEFAULTS:
+    for tokens, score, _label in TEXT_GRADE_DEFAULTS:
         if all(token in lowered for token in tokens):
             return score
     return None
+
+
+def parse_grade_label(value: Any, score: float | None = None) -> str:
+    if isinstance(value, dict):
+        label = value.get("label") or value.get("condition") or value.get("text")
+        if label:
+            return str(label)
+    text = _stringify(value).strip() if value is not None else ""
+    lowered = text.lower()
+    for tokens, _score, label in TEXT_GRADE_DEFAULTS:
+        if all(token in lowered for token in tokens):
+            return label
+    return label_for_score(score)
 
 
 def parse_grade_range(value: Any, fallback_score: float | None = None) -> tuple[str | None, str | None, list[str]]:
@@ -92,17 +126,28 @@ def parse_grade_range(value: Any, fallback_score: float | None = None) -> tuple[
     return None, None, warnings
 
 
+def normalize_subgrade(key: str, value: Any, warnings: list[str]) -> dict[str, Any]:
+    score = parse_grade_value(value)
+    label = parse_grade_label(value, score)
+    reason = str(value.get("reason") or value.get("notes") or "") if isinstance(value, dict) else ""
+    if isinstance(value, str) and score is not None and not GRADE_NUMBER_RE.search(value):
+        warnings.append(f"AI returned textual subgrade; normalized {value} -> {score}")
+    if score is None and value not in (None, ""):
+        warnings.append(f"Could not parse subgrade {key}={_stringify(value)[:80]}")
+    return {"score": score, "label": label, "reason": reason}
+
+
 def normalize_final_grading_result(result: dict[str, Any]) -> dict[str, Any]:
     normalized = dict(result)
     warnings: list[str] = list(result.get("parsing_warnings") or [])
-    subgrades = result.get("subgrades") if isinstance(result.get("subgrades"), dict) else {}
-    if not subgrades and isinstance(result.get("subscores"), dict):
-        subgrades = result["subscores"]
-        normalized["subgrades"] = subgrades
+    raw_subgrades = result.get("subgrades") if isinstance(result.get("subgrades"), dict) else {}
+    if not raw_subgrades and isinstance(result.get("subscores"), dict):
+        raw_subgrades = result["subscores"]
 
     overall = parse_grade_value(
         result.get("overall_score")
         or result.get("estimated_grade")
+        or result.get("estimated_grade_label")
         or result.get("grade")
         or result.get("final_grade")
         or result
@@ -111,20 +156,28 @@ def normalize_final_grading_result(result: dict[str, Any]) -> dict[str, Any]:
         warnings.append("Could not parse overall score from AI grading result.")
     else:
         normalized["overall_score"] = overall
-        normalized.setdefault("estimated_grade", str(overall))
+        normalized["estimated_grade"] = str(overall)
+        normalized.setdefault("estimated_grade_label", parse_grade_label(result.get("estimated_grade_label") or result.get("estimated_grade"), overall))
 
     low, high, range_warnings = parse_grade_range(result.get("grade_range"), overall)
     warnings.extend(range_warnings)
     if low is not None or high is not None:
-        normalized["grade_range"] = f"{low or high} - {high or low}"
-        normalized["parsed_grade_range"] = {"low": low or high, "high": high or low}
+        range_min = float(low or high)
+        range_max = float(high or low)
+        normalized["grade_range"] = {
+            "min": range_min,
+            "max": range_max,
+            "label": f"{range_min} - {range_max}",
+        }
+        normalized["parsed_grade_range"] = {"low": str(range_min), "high": str(range_max)}
 
+    normalized_subgrades: dict[str, dict[str, Any]] = {}
     parsed_subgrades: dict[str, float | None] = {}
     for key in ("centering", "corners", "edges", "surface"):
-        parsed = parse_grade_value(subgrades.get(key))
-        parsed_subgrades[key] = parsed
-        if subgrades.get(key) not in (None, "") and parsed is None:
-            warnings.append(f"Could not parse subgrade {key}={_stringify(subgrades.get(key))[:80]}")
+        subgrade = normalize_subgrade(key, raw_subgrades.get(key), warnings)
+        normalized_subgrades[key] = subgrade
+        parsed_subgrades[key] = subgrade["score"]
+    normalized["subgrades"] = normalized_subgrades
     normalized["parsed_subgrades"] = parsed_subgrades
     if warnings:
         normalized["parsing_warnings"] = warnings
