@@ -78,6 +78,19 @@ function entryValueHuf(entry?: { converted_market_price?: number | null; convert
   return null;
 }
 
+function collectionThumbnail(media: CardMedia[]): { filePath: string | null; label: string | null; cacheKey: string | number | null } {
+  const images = media.filter((item) => item.media_type === "image");
+  const front = images.find((item) => item.label === "front" || item.label?.startsWith("front_"));
+  const normalized = images.find((item) => item.label?.includes("normalized"));
+  const fallback = images[0];
+  const selected = front ?? normalized ?? fallback ?? null;
+  return {
+    filePath: selected?.file_path ?? null,
+    label: selected?.label ?? null,
+    cacheKey: selected?.id ?? selected?.created_at ?? null,
+  };
+}
+
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="space-y-1.5 text-xs font-medium text-slate-400">
@@ -117,15 +130,29 @@ export function CollectionPage({ mode = "browse", onOpenOwnedCard }: CollectionP
       const withCards = await Promise.all(
         ownedCards.map(async (ownedCard) => {
           const card = cardList.find((item) => item.id === ownedCard.card_id) ?? null;
+          let thumbnail = { filePath: null as string | null, label: null as string | null, cacheKey: null as string | number | null };
+          let gradingStatus: string | null = null;
+          try {
+            const media = await api.getOwnedCardMedia(ownedCard.id);
+            thumbnail = collectionThumbnail(media);
+          } catch {
+            thumbnail = { filePath: null, label: null, cacheKey: null };
+          }
+          try {
+            const status = await api.getAIGradingStatus(ownedCard.id);
+            gradingStatus = status.status;
+          } catch {
+            gradingStatus = null;
+          }
           try {
             const price = await api.getLatestOwnedCardPriceHistory(ownedCard.id);
             if (price.latest) {
-              return { ...ownedCard, card, latest_raw_price_huf: entryValueHuf(price.latest) };
+              return { ...ownedCard, card, latest_raw_price_huf: entryValueHuf(price.latest), thumbnail_file_path: thumbnail.filePath, thumbnail_label: thumbnail.label, thumbnail_cache_key: thumbnail.cacheKey, grading_status: gradingStatus };
             }
             const legacyPrice = await api.getLatestOwnedCardPrice(ownedCard.id);
-            return { ...ownedCard, card, latest_raw_price_huf: legacyPrice?.raw_price_huf ?? null };
+            return { ...ownedCard, card, latest_raw_price_huf: legacyPrice?.raw_price_huf ?? null, thumbnail_file_path: thumbnail.filePath, thumbnail_label: thumbnail.label, thumbnail_cache_key: thumbnail.cacheKey, grading_status: gradingStatus };
           } catch {
-            return { ...ownedCard, card, latest_raw_price_huf: null };
+            return { ...ownedCard, card, latest_raw_price_huf: null, thumbnail_file_path: thumbnail.filePath, thumbnail_label: thumbnail.label, thumbnail_cache_key: thumbnail.cacheKey, grading_status: gradingStatus };
           }
         }),
       );
@@ -662,10 +689,20 @@ export function CollectionPage({ mode = "browse", onOpenOwnedCard }: CollectionP
           {filteredItems.map((item) => (
             <button
               key={item.id}
-              className="group rounded-2xl border border-white/10 bg-white/[0.04] p-4 text-left transition hover:-translate-y-0.5 hover:border-blue-300/35 hover:bg-white/[0.07]"
+              className="group overflow-hidden rounded-2xl border border-white/10 bg-white/[0.04] text-left transition hover:-translate-y-0.5 hover:border-blue-300/35 hover:bg-white/[0.07]"
               onClick={() => onOpenOwnedCard(item.id)}
               type="button"
             >
+              <div className="aspect-[4/3] bg-slate-950/55">
+                {item.thumbnail_file_path ? (
+                  <img className="h-full w-full object-cover transition group-hover:scale-[1.02]" src={mediaUrl(item.thumbnail_file_path, item.thumbnail_cache_key)} alt={`${item.card?.name ?? "Card"} thumbnail`} />
+                ) : (
+                  <div className="flex h-full w-full items-center justify-center bg-gradient-to-br from-slate-900 to-slate-800 text-sm text-slate-500">
+                    No image
+                  </div>
+                )}
+              </div>
+              <div className="p-4">
               <div className="flex items-start justify-between gap-3">
                 <div className="min-w-0">
                   <div className="truncate text-base font-semibold text-slate-50">{item.card?.name ?? `Card #${item.card_id}`}</div>
@@ -684,8 +721,9 @@ export function CollectionPage({ mode = "browse", onOpenOwnedCard }: CollectionP
                 </div>
               </div>
               <div className="mt-4 flex items-center justify-between gap-3 text-xs text-slate-500">
-                <span className="truncate">{item.copy_label || item.storage_location || "Owned copy"}</span>
+                <span className="truncate">{item.grading_status ? `AI: ${item.grading_status}` : item.thumbnail_label || item.copy_label || "Owned copy"}</span>
                 <span className="text-blue-200 group-hover:text-blue-100">Open</span>
+              </div>
               </div>
             </button>
           ))}
@@ -708,7 +746,16 @@ export function CollectionPage({ mode = "browse", onOpenOwnedCard }: CollectionP
             <tbody className="divide-y divide-slate-800 bg-charcoal-850">
               {filteredItems.map((item) => (
                 <tr key={item.id} className="transition hover:bg-slate-800/40">
-                  <td className="px-4 py-4 font-medium text-slate-100">{item.card?.name ?? `Card #${item.card_id}`}</td>
+                  <td className="px-4 py-4 font-medium text-slate-100">
+                    <div className="flex items-center gap-3">
+                      {item.thumbnail_file_path ? (
+                        <img className="h-14 w-14 rounded-xl object-cover" src={mediaUrl(item.thumbnail_file_path, item.thumbnail_cache_key)} alt={`${item.card?.name ?? "Card"} thumbnail`} />
+                      ) : (
+                        <div className="flex h-14 w-14 items-center justify-center rounded-xl bg-slate-900 text-[10px] text-slate-500">No image</div>
+                      )}
+                      <span>{item.card?.name ?? `Card #${item.card_id}`}</span>
+                    </div>
+                  </td>
                   <td className="px-4 py-4 text-slate-300">{item.card?.set_name ?? "-"}</td>
                   <td className="px-4 py-4 text-slate-300">{item.card?.card_number ?? "-"}</td>
                   <td className="px-4 py-4 text-slate-300">{item.copy_label ?? "-"}</td>

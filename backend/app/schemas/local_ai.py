@@ -33,6 +33,12 @@ class LocalAIConfigRead(SQLModel):
     is_localhost: bool
     server_role: str = "local_app"
     client_role: str = "same_machine"
+    ai_model: str = "auto"
+    context_tokens: int = 15000
+    phase_a_tokens: int = 1500
+    phase_b_tokens: int = 2500
+    temperature: float = 0.1
+    send_diagnostic_images: bool = True
 
 
 class LocalAITestConnectionRead(SQLModel):
@@ -44,3 +50,23 @@ class LocalAITestConnectionRead(SQLModel):
     selected_model: Optional[str] = None
     selected_model_found: bool
     message: str
+
+
+class LocalAISettingsRead(SQLModel):
+    ai_model: str = "auto"
+    context_tokens: int = 15000
+    phase_a_tokens: int = 1500
+    phase_b_tokens: int = 2500
+    temperature: float = 0.1
+    send_diagnostic_images: bool = True
+    disable_thinking: bool = True
+
+
+class LocalAISettingsUpdate(SQLModel):
+    ai_model: Optional[str] = None
+    context_tokens: Optional[int] = None
+    phase_a_tokens: Optional[int] = None
+    phase_b_tokens: Optional[int] = None
+    temperature: Optional[float] = None
+    send_diagnostic_images: Optional[bool] = None
+    disable_thinking: Optional[bool] = None

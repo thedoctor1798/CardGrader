@@ -1,7 +1,7 @@
 import { Bug, RefreshCw, Trash2 } from "lucide-react";
 import { useCallback, useEffect, useState } from "react";
 import { api } from "../api/client";
-import type { AppInfo, LocalAIConfig, LocalAIStatus, LocalAITestConnection } from "../api/types";
+import type { AppInfo, LocalAIConfig, LocalAISettings, LocalAIStatus, LocalAITestConnection } from "../api/types";
 import { ActionButton } from "../components/ActionButton";
 import { EmptyState } from "../components/EmptyState";
 import { FxSettings } from "../components/FxSettings";
@@ -20,6 +20,7 @@ export function SettingsPage({ debugMode, onToggleDebugMode }: SettingsPageProps
   const [appInfo, setAppInfo] = useState<AppInfo | null>(null);
   const [localAI, setLocalAI] = useState<LocalAIStatus | null>(null);
   const [localAIConfig, setLocalAIConfig] = useState<LocalAIConfig | null>(null);
+  const [aiSettings, setAiSettings] = useState<LocalAISettings | null>(null);
   const [connectionTest, setConnectionTest] = useState<LocalAITestConnection | null>(null);
   const [loading, setLoading] = useState(true);
   const [busy, setBusy] = useState(false);
@@ -29,14 +30,16 @@ export function SettingsPage({ debugMode, onToggleDebugMode }: SettingsPageProps
   const load = useCallback(async () => {
     setLoading(true);
     try {
-      const [info, aiStatus, aiConfig] = await Promise.all([
+      const [info, aiStatus, aiConfig, settings] = await Promise.all([
         api.getAppInfo(),
         api.getLocalAIStatus(),
         api.getLocalAIConfig(),
+        api.getLocalAISettings(),
       ]);
       setAppInfo(info);
       setLocalAI(aiStatus);
       setLocalAIConfig(aiConfig);
+      setAiSettings(settings);
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Settings failed to load.");
@@ -59,6 +62,23 @@ export function SettingsPage({ debugMode, onToggleDebugMode }: SettingsPageProps
       setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : "Local AI connection test failed.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const saveAISettings = async () => {
+    if (!aiSettings) return;
+    setBusy(true);
+    setMessage(null);
+    try {
+      const saved = await api.updateLocalAISettings(aiSettings);
+      setAiSettings(saved);
+      setLocalAIConfig((current) => current ? { ...current, ...saved } : current);
+      setMessage("AI settings saved. New grading runs will use these values.");
+      setError(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "AI settings save failed.");
     } finally {
       setBusy(false);
     }
@@ -174,6 +194,88 @@ export function SettingsPage({ debugMode, onToggleDebugMode }: SettingsPageProps
               )}
             </div>
           )}
+        </Panel>
+      )}
+
+      {aiSettings && (
+        <Panel
+          title="AI grading settings"
+          subtitle="Saved in CardGrader and used by new two-phase AI grading runs. No .env edit required for these workflow settings."
+          action={
+            <ActionButton tone="primary" disabled={busy} onClick={saveAISettings}>
+              Save AI settings
+            </ActionButton>
+          }
+        >
+          <div className="grid gap-4 md:grid-cols-2 xl:grid-cols-3">
+            <label className="space-y-1.5 text-sm text-slate-300">
+              <span className="text-xs font-semibold uppercase text-slate-500">AI Model</span>
+              <input
+                className="min-h-11 w-full rounded-xl border border-white/10 bg-slate-950/50 px-3 text-slate-100"
+                placeholder="auto or exact LM Studio model id"
+                value={aiSettings.ai_model}
+                onChange={(event) => setAiSettings({ ...aiSettings, ai_model: event.target.value })}
+              />
+            </label>
+            <label className="space-y-1.5 text-sm text-slate-300">
+              <span className="text-xs font-semibold uppercase text-slate-500">Context Tokens</span>
+              <input
+                className="min-h-11 w-full rounded-xl border border-white/10 bg-slate-950/50 px-3 text-slate-100"
+                inputMode="numeric"
+                value={aiSettings.context_tokens}
+                onChange={(event) => setAiSettings({ ...aiSettings, context_tokens: Number(event.target.value) || 15000 })}
+              />
+            </label>
+            <label className="space-y-1.5 text-sm text-slate-300">
+              <span className="text-xs font-semibold uppercase text-slate-500">Phase A Tokens</span>
+              <input
+                className="min-h-11 w-full rounded-xl border border-white/10 bg-slate-950/50 px-3 text-slate-100"
+                inputMode="numeric"
+                value={aiSettings.phase_a_tokens}
+                onChange={(event) => setAiSettings({ ...aiSettings, phase_a_tokens: Number(event.target.value) || 1500 })}
+              />
+            </label>
+            <label className="space-y-1.5 text-sm text-slate-300">
+              <span className="text-xs font-semibold uppercase text-slate-500">Phase B Tokens</span>
+              <input
+                className="min-h-11 w-full rounded-xl border border-white/10 bg-slate-950/50 px-3 text-slate-100"
+                inputMode="numeric"
+                value={aiSettings.phase_b_tokens}
+                onChange={(event) => setAiSettings({ ...aiSettings, phase_b_tokens: Number(event.target.value) || 2500 })}
+              />
+            </label>
+            <label className="space-y-1.5 text-sm text-slate-300">
+              <span className="text-xs font-semibold uppercase text-slate-500">Temperature</span>
+              <input
+                className="min-h-11 w-full rounded-xl border border-white/10 bg-slate-950/50 px-3 text-slate-100"
+                inputMode="decimal"
+                step="0.1"
+                type="number"
+                value={aiSettings.temperature}
+                onChange={(event) => setAiSettings({ ...aiSettings, temperature: Number(event.target.value) })}
+              />
+            </label>
+            <div className="grid gap-3 rounded-2xl border border-white/10 bg-white/[0.035] p-3">
+              <label className="flex items-center justify-between gap-3 text-sm text-slate-200">
+                <span>Send Diagnostic Images</span>
+                <input
+                  className="h-5 w-5"
+                  type="checkbox"
+                  checked={aiSettings.send_diagnostic_images}
+                  onChange={(event) => setAiSettings({ ...aiSettings, send_diagnostic_images: event.target.checked })}
+                />
+              </label>
+              <label className="flex items-center justify-between gap-3 text-sm text-slate-200">
+                <span>Disable Thinking</span>
+                <input
+                  className="h-5 w-5"
+                  type="checkbox"
+                  checked={aiSettings.disable_thinking}
+                  onChange={(event) => setAiSettings({ ...aiSettings, disable_thinking: event.target.checked })}
+                />
+              </label>
+            </div>
+          </div>
         </Panel>
       )}
 

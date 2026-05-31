@@ -6,9 +6,9 @@ from .analysis import (
     AnalysisRunDetailRead,
     AnalysisRunRead,
 )
-from .cards import CardCreate, CardMediaRead, CardRead, CardUpdate, DerivedMediaCreate, MediaUploadResponse, OwnedCardCreate, OwnedCardRead, OwnedCardUpdate
+from .cards import CardCreate, CardMediaRead, CardRead, CardUpdate, DerivedMediaCreate, MediaUploadResponse, OwnedCardCreate, OwnedCardDeleteResponse, OwnedCardRead, OwnedCardUpdate
 from .centering import CenteringMeasurementCreate, CenteringMeasurementRead
-from .local_ai import LocalAIConfigRead, LocalAIStatusRead, LocalAITestConnectionRead
+from .local_ai import LocalAIConfigRead, LocalAISettingsRead, LocalAISettingsUpdate, LocalAIStatusRead, LocalAITestConnectionRead
 from .prices import (
     CollectionValuationRead,
     CollectionSnapshotRead,
@@ -66,10 +66,13 @@ __all__ = [
     "CenteringMeasurementRead",
     "GradingOpportunityRead",
     "LocalAIConfigRead",
+    "LocalAISettingsRead",
+    "LocalAISettingsUpdate",
     "LocalAIStatusRead",
     "LocalAITestConnectionRead",
     "MediaUploadResponse",
     "OwnedCardCreate",
+    "OwnedCardDeleteResponse",
     "OwnedCardRead",
     "OwnedCardUpdate",
     "ManualPriceCreate",

@@ -61,7 +61,7 @@ export default function App() {
       {page === "dashboard" && <DashboardPage />}
       {page === "collection" && <CollectionPage mode="browse" onOpenOwnedCard={openOwnedCard} />}
       {page === "add" && <CollectionPage mode="add" onOpenOwnedCard={openOwnedCard} />}
-      {page === "detail" && ownedCardId !== null && <CardDetailPage ownedCardId={ownedCardId} debugMode={debugMode} />}
+      {page === "detail" && ownedCardId !== null && <CardDetailPage ownedCardId={ownedCardId} debugMode={debugMode} onDeleted={() => navigate("collection")} />}
       {page === "settings" && <SettingsPage debugMode={debugMode} onToggleDebugMode={toggleDebugMode} />}
       {page === "debug" && <DebugPage />}
     </Layout>

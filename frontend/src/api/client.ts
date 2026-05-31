@@ -29,6 +29,8 @@ import type {
   RecognitionAcceptResponse,
   RecognitionResponse,
   OwnedCard,
+  OwnedCardDeleteResponse,
+  LocalAISettings,
   ManualPriceCreate,
   PriceFetchRequest,
   PriceFetchResponse,
@@ -102,6 +104,9 @@ export const api = {
   getAppInfo: () => request<AppInfo>("/api/app/info"),
   getLocalAIStatus: () => request<LocalAIStatus>("/api/local-ai/status"),
   getLocalAIConfig: () => request<LocalAIConfig>("/api/local-ai/config"),
+  getLocalAISettings: () => request<LocalAISettings>("/api/local-ai/settings"),
+  updateLocalAISettings: (body: Partial<LocalAISettings>) =>
+    request<LocalAISettings>("/api/local-ai/settings", { method: "PUT", body: JSON.stringify(body) }),
   testLocalAIConnection: () => request<LocalAITestConnection>("/api/local-ai/test-connection", { method: "POST" }),
   getCollectionSummary: () => request<CollectionSummary>("/api/collection/summary"),
   getCollectionValuation: () => request<CollectionValuation>("/api/collection/valuation"),
@@ -119,6 +124,7 @@ export const api = {
     request<OwnedCard>("/api/owned-cards", { method: "POST", body: JSON.stringify(body) }),
   updateOwnedCard: (id: number, body: Partial<OwnedCard>) =>
     request<OwnedCard>(`/api/owned-cards/${id}`, { method: "PATCH", body: JSON.stringify(body) }),
+  deleteOwnedCard: (id: number) => request<OwnedCardDeleteResponse>(`/api/owned-cards/${id}`, { method: "DELETE" }),
   getCards: () => request<Card[]>("/api/cards"),
   getCard: (id: number) => request<Card>(`/api/cards/${id}`),
   createCard: (body: Partial<Card>) => request<Card>("/api/cards", { method: "POST", body: JSON.stringify(body) }),

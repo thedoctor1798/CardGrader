@@ -27,6 +27,7 @@ from ..config import (
     LOCAL_AI_MODEL_NAME,
     LOCAL_AI_PROVIDER,
     LOCAL_AI_READ_TIMEOUT_SECONDS,
+    LOCAL_AI_RESPONSE_FORMAT_TYPE,
     LOCAL_AI_STREAMING_ENABLED,
     LOCAL_AI_TIMEOUT_SECONDS,
     LOCAL_AI_WORKER_BASE_URL,
@@ -34,13 +35,30 @@ from ..config import (
     ROOT,
 )
 from ..models import AnalysisAsset, AnalysisFinding, AnalysisRun, Card, CenteringMeasurement, OwnedCard
+from .grading_parser import parse_grade_value
 
 logger = logging.getLogger(__name__)
 LOCAL_HOSTS = {"127.0.0.1", "localhost", "::1"}
 LOCAL_AI_ANALYSIS_VERSION = "local_ai_fast_v1"
 LOCAL_AI_PROMPT_VERSION = "local_vision_v2_evidence_guarded"
 LOCAL_AI_TEMPERATURE = 0.1
-LOCAL_AI_RESPONSE_FORMAT = {"type": "json_object"}
+CARD_GRADING_PHASE_RESULT_JSON_SCHEMA: dict[str, Any] = {
+    "type": "object",
+    "properties": {},
+    "additionalProperties": True,
+}
+LOCAL_AI_RESPONSE_FORMAT = (
+    {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "card_grading_phase_result",
+            "schema": CARD_GRADING_PHASE_RESULT_JSON_SCHEMA,
+            "strict": False,
+        },
+    }
+    if LOCAL_AI_RESPONSE_FORMAT_TYPE == "json_schema"
+    else {"type": "text"}
+)
 ASSET_PRIORITY = [
     "front_resized",
     "back_resized",
@@ -386,7 +404,13 @@ class LMStudioDirectProvider(LocalAIProvider):
         model_name = self.selected_model_name()
         if not model_name:
             raise HTTPException(status_code=400, detail="No local vision model is loaded or configured.")
-        logger.info("Local AI request model=%s endpoint=%s images=%s", model_name, f"{self.base_url.rstrip('/')}/chat/completions", len(assets))
+        logger.info(
+            "Local AI request model=%s endpoint=%s images=%s response_format=%s",
+            model_name,
+            f"{self.base_url.rstrip('/')}/chat/completions",
+            len(assets),
+            LOCAL_AI_RESPONSE_FORMAT.get("type"),
+        )
         messages_content: list[dict[str, Any]] = [{"type": "text", "text": prompt}]
         messages_content.extend(data_url_for_asset(asset) for asset in assets)
         payload = {
@@ -1511,13 +1535,7 @@ def remote_ai_grade_http(payload: dict[str, Any]) -> dict[str, Any]:
 
 
 def score_value(value: Any) -> float | None:
-    if value is None:
-        return None
-    try:
-        numeric = float(value)
-    except (TypeError, ValueError):
-        return None
-    return max(0.0, min(10.0, numeric))
+    return parse_grade_value(value)
 
 
 def grade_range_value(value: Any) -> str | None:

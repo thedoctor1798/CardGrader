@@ -145,6 +145,16 @@ class PriceProviderSetting(SQLModel, table=True):
     updated_at: datetime = Field(default_factory=utc_now)
 
 
+class AppSetting(SQLModel, table=True):
+    __tablename__ = "app_settings"
+
+    id: Optional[int] = Field(default=None, primary_key=True)
+    key: str = Field(index=True, sa_column_kwargs={"unique": True})
+    value_json: Optional[str] = None
+    created_at: datetime = Field(default_factory=utc_now)
+    updated_at: datetime = Field(default_factory=utc_now)
+
+
 class PriceProviderCardMapping(SQLModel, table=True):
     __tablename__ = "price_provider_card_mappings"
     __table_args__ = (

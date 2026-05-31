@@ -575,6 +575,10 @@ export type AnalysisReport = {
 export type OwnedCardWithCard = OwnedCard & {
   card?: Card | null;
   latest_raw_price_huf?: number | null;
+  thumbnail_file_path?: string | null;
+  thumbnail_label?: string | null;
+  thumbnail_cache_key?: string | number | null;
+  grading_status?: string | null;
 };
 
 export type AppInfo = {
@@ -608,6 +612,14 @@ export type CleanupGeneratedMediaResponse = {
   deleted: Record<string, number>;
 };
 
+export type OwnedCardDeleteResponse = {
+  ok: boolean;
+  deleted_owned_card_id: number;
+  deleted_files: number;
+  deleted: Record<string, number>;
+  message: string;
+};
+
 export type LocalAIStatus = {
   mode: "disabled" | "server_local" | "remote_worker" | string;
   enabled: boolean;
@@ -638,6 +650,22 @@ export type LocalAIConfig = {
   is_localhost: boolean;
   server_role?: string;
   client_role?: string;
+  ai_model?: string;
+  context_tokens?: number;
+  phase_a_tokens?: number;
+  phase_b_tokens?: number;
+  temperature?: number;
+  send_diagnostic_images?: boolean;
+};
+
+export type LocalAISettings = {
+  ai_model: string;
+  context_tokens: number;
+  phase_a_tokens: number;
+  phase_b_tokens: number;
+  temperature: number;
+  send_diagnostic_images: boolean;
+  disable_thinking: boolean;
 };
 
 export type LocalAITestConnection = {

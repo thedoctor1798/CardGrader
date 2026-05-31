@@ -68,6 +68,14 @@ class OwnedCardRead(OwnedCardBase):
     updated_at: datetime
 
 
+class OwnedCardDeleteResponse(SQLModel):
+    ok: bool
+    deleted_owned_card_id: int
+    deleted_files: int
+    deleted: dict[str, int]
+    message: str
+
+
 class CardMediaRead(SQLModel):
     id: int
     owned_card_id: Optional[int] = None

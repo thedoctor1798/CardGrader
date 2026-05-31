@@ -1,4 +1,4 @@
-import { Crop, Play, RefreshCw, RotateCcw, Save, Upload, X } from "lucide-react";
+import { Crop, Play, RefreshCw, RotateCcw, Save, Trash2, Upload, X } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent, ReactNode, WheelEvent } from "react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -64,6 +64,7 @@ const processedVariantOptions = [
 type CardDetailPageProps = {
   ownedCardId: number;
   debugMode: boolean;
+  onDeleted: () => void;
 };
 
 type PriceForm = {
@@ -306,6 +307,12 @@ function displayRemoteValue(value?: number | string | null): string {
   return value;
 }
 
+function displayGrade(value?: number | string | null): string {
+  if (value === null || value === undefined || value === "") return "N/A";
+  if (typeof value === "number") return formatNumber(value);
+  return value;
+}
+
 function aiWarningText(warning: string): string {
   if (warning === "model_reported_issue_for_unprovided_area" || warning === "invalid_issues_filtered") {
     return "A modell olyan területre jelzett hibát, amelyről nem kapott képet. Ez a jelzés el lett vetve.";
@@ -433,22 +440,22 @@ function SmartGradePanel({ pipeline, debugMode, onRetryPhaseB }: { pipeline: AIG
           <div className="mt-1 text-xs opacity-80">Two-step workflow status: {pipeline.status}</div>
         </div>
         <div className="text-right">
-          <div className="text-4xl font-semibold leading-none">{final?.estimated_grade ?? "-"}</div>
+          <div className="text-4xl font-semibold leading-none">{displayGrade(final?.estimated_grade)}</div>
           <div className="text-xs opacity-80">Final estimate</div>
         </div>
       </div>
       <div className="mt-4 grid gap-2 sm:grid-cols-2">
         <StatCard label="Visual + centering" value={phaseAFinished ? "Completed" : pipeline.phase_a_status ?? "Pending"} />
         <StatCard label="Surface + final grade" value={phaseBFinished ? "Completed" : pipeline.phase_b_status ?? "Pending"} />
-        <StatCard label="Range" value={final?.grade_range ?? "-"} />
+        <StatCard label="Range" value={displayGrade(final?.grade_range)} />
         <StatCard label="Confidence" value={final?.confidence !== undefined ? formatNumber(final.confidence, 2) : "-"} />
       </div>
       {final?.subgrades && (
         <div className="mt-3 grid grid-cols-2 gap-2">
-          <StatCard label="Centering" value={final.subgrades.centering ?? "-"} />
-          <StatCard label="Corners" value={final.subgrades.corners ?? "-"} />
-          <StatCard label="Edges" value={final.subgrades.edges ?? "-"} />
-          <StatCard label="Surface" value={final.subgrades.surface ?? "-"} />
+          <StatCard label="Centering" value={displayGrade(final.subgrades.centering)} />
+          <StatCard label="Corners" value={displayGrade(final.subgrades.corners)} />
+          <StatCard label="Edges" value={displayGrade(final.subgrades.edges)} />
+          <StatCard label="Surface" value={displayGrade(final.subgrades.surface)} />
         </div>
       )}
       {final?.reasoning_summary && <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-slate-100">{final.reasoning_summary}</div>}
@@ -673,7 +680,7 @@ function workOverlayForLabel(label: string | null): WorkOverlayState | null {
   };
 }
 
-export function CardDetailPage({ ownedCardId, debugMode }: CardDetailPageProps) {
+export function CardDetailPage({ ownedCardId, debugMode, onDeleted }: CardDetailPageProps) {
   const [ownedCard, setOwnedCard] = useState<OwnedCard | null>(null);
   const [card, setCard] = useState<Card | null>(null);
   const [media, setMedia] = useState<CardMedia[]>([]);
@@ -712,6 +719,7 @@ export function CardDetailPage({ ownedCardId, debugMode }: CardDetailPageProps) 
   const [selectedProcessedVariant, setSelectedProcessedVariant] = useState("original_normalized");
   const [boundaryEditorSide, setBoundaryEditorSide] = useState<"front" | "back" | null>(null);
   const [showCenteringEditor, setShowCenteringEditor] = useState(false);
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
 
   const busy = busyLabel !== null;
   const workOverlay = workOverlayForLabel(busyLabel);
@@ -1454,6 +1462,20 @@ export function CardDetailPage({ ownedCardId, debugMode }: CardDetailPageProps) 
     }
   };
 
+  const deleteCard = async () => {
+    setBusyLabel("Deleting card...");
+    try {
+      const result = await api.deleteOwnedCard(ownedCardId);
+      setNotice({ scope: "details", tone: "success", text: result.message });
+      onDeleted();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Delete failed");
+    } finally {
+      setBusyLabel(null);
+      setShowDeleteConfirm(false);
+    }
+  };
+
   const displayMarketPrice = latestMarketPrice ?? (isMarketPrice(latestPrice) ? latestPrice : null);
   const displayManualPrice = latestManualOwnedPrice ?? (!isMarketPrice(latestPrice) ? latestPrice : null);
   const imageCoverageLabel = latestFrontImage && latestBackImage ? "front + back" : latestFrontImage ? "front only" : latestBackImage ? "back only" : "no images";
@@ -1488,8 +1510,19 @@ export function CardDetailPage({ ownedCardId, debugMode }: CardDetailPageProps) 
           </div>
           <div className="grid gap-2 sm:grid-cols-2 lg:min-w-[360px]">
             <StatCard label="Latest value" value={displayMarketPrice ? sourcePriceDisplay(displayMarketPrice) : "No price"} />
-            <StatCard label="AI grade" value={gradingPipeline?.final_result?.estimated_grade ?? report?.estimated_grade_range?.estimated_grade_high ?? "-"} tone={gradingPipeline?.final_result ? "good" : "default"} />
+            <StatCard label="AI grade" value={displayGrade(gradingPipeline?.final_result?.estimated_grade ?? report?.estimated_grade_range?.estimated_grade_high)} tone={gradingPipeline?.final_result ? "good" : "default"} />
           </div>
+        </div>
+        <div className="mt-4 flex flex-wrap justify-end gap-2">
+          <button
+            className="inline-flex min-h-10 items-center justify-center gap-2 rounded-xl border border-rose-400/35 bg-rose-500/10 px-3 text-sm font-semibold text-rose-100 hover:bg-rose-500/18 disabled:opacity-60"
+            disabled={busy}
+            onClick={() => setShowDeleteConfirm(true)}
+            type="button"
+          >
+            <Trash2 size={16} />
+            Delete Card
+          </button>
         </div>
         <div className="mt-4 grid gap-2 sm:grid-cols-5">
           {gradingStepState.map((step) => (
@@ -2081,12 +2114,12 @@ export function CardDetailPage({ ownedCardId, debugMode }: CardDetailPageProps) 
                   </div>
                 )}
                 <div className="grid grid-cols-2 gap-2">
-                  <StatCard label="Overall score" value={formatNumber(report.scores.overall_score)} tone="good" />
-                  <StatCard label="Grade range" value={`${report.estimated_grade_range.estimated_grade_low ?? "-"} - ${report.estimated_grade_range.estimated_grade_high ?? "-"}`} tone="warn" />
-                  <StatCard label="Centering" value={formatNumber(report.scores.centering_score)} />
-                  <StatCard label="Corners" value={formatNumber(report.scores.corners_score)} />
-                  <StatCard label="Edges" value={formatNumber(report.scores.edges_score)} />
-                  <StatCard label="Surface" value={formatNumber(report.scores.surface_score)} />
+                  <StatCard label="Overall score" value={displayGrade(report.scores.overall_score)} tone="good" />
+                  <StatCard label="Grade range" value={`${displayGrade(report.estimated_grade_range.estimated_grade_low)} - ${displayGrade(report.estimated_grade_range.estimated_grade_high)}`} tone="warn" />
+                  <StatCard label="Centering" value={displayGrade(report.scores.centering_score)} />
+                  <StatCard label="Corners" value={displayGrade(report.scores.corners_score)} />
+                  <StatCard label="Edges" value={displayGrade(report.scores.edges_score)} />
+                  <StatCard label="Surface" value={displayGrade(report.scores.surface_score)} />
                 </div>
                 {(latestCenteringBySide.front || latestCenteringBySide.back || report.latest_centering) && (
                   <div className="rounded-lg border border-cyan-500/25 bg-cyan-500/10 p-4 text-sm text-cyan-100">
@@ -2200,6 +2233,33 @@ export function CardDetailPage({ ownedCardId, debugMode }: CardDetailPageProps) 
             </div>
             <div className="p-4">
               <img className="mx-auto max-h-[78vh] rounded-lg object-contain" src={mediaUrl(previewAsset.file_path, cacheKeyFor(previewAsset))} alt={previewAsset.label ?? "preview"} />
+            </div>
+          </div>
+        </div>
+      )}
+
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 p-4" onClick={() => setShowDeleteConfirm(false)}>
+          <div className="w-full max-w-lg rounded-2xl border border-white/10 bg-slate-950 p-5 shadow-2xl" onClick={(event) => event.stopPropagation()}>
+            <div className="flex items-start justify-between gap-3">
+              <div>
+                <h2 className="text-lg font-semibold text-slate-50">Delete card?</h2>
+                <p className="mt-2 text-sm leading-6 text-slate-300">
+                  This will remove the owned card record, uploaded images, preprocessing outputs, AI grading results, and associated metadata.
+                </p>
+              </div>
+              <button className="rounded-lg p-2 text-slate-400 hover:bg-white/10 hover:text-slate-100" onClick={() => setShowDeleteConfirm(false)} type="button">
+                <X size={18} />
+              </button>
+            </div>
+            <div className="mt-5 grid gap-3 sm:grid-cols-2">
+              <button className="min-h-11 rounded-xl border border-white/10 px-4 text-sm font-semibold text-slate-200 hover:bg-white/10" disabled={busy} onClick={() => setShowDeleteConfirm(false)} type="button">
+                Cancel
+              </button>
+              <button className="inline-flex min-h-11 items-center justify-center gap-2 rounded-xl bg-rose-500 px-4 text-sm font-semibold text-white hover:bg-rose-400 disabled:opacity-60" disabled={busy} onClick={deleteCard} type="button">
+                <Trash2 size={16} />
+                Delete
+              </button>
             </div>
           </div>
         </div>

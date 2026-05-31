@@ -2,7 +2,8 @@ from fastapi import APIRouter, Depends
 from sqlmodel import Session
 
 from ..database import get_session
-from ..schemas import LocalAIConfigRead, LocalAIStatusRead, LocalAITestConnectionRead
+from ..schemas import LocalAIConfigRead, LocalAISettingsRead, LocalAISettingsUpdate, LocalAIStatusRead, LocalAITestConnectionRead
+from ..services.ai_settings import get_ai_settings, update_ai_settings
 from ..services.local_ai import (
     dry_run_local_ai,
     local_ai_config,
@@ -25,8 +26,18 @@ def get_local_ai_status():
 
 
 @router.get("/local-ai/config", response_model=LocalAIConfigRead)
-def get_local_ai_config():
-    return local_ai_config()
+def get_local_ai_config(session: Session = Depends(get_session)):
+    return {**local_ai_config(), **get_ai_settings(session)}
+
+
+@router.get("/local-ai/settings", response_model=LocalAISettingsRead)
+def get_local_ai_settings(session: Session = Depends(get_session)):
+    return get_ai_settings(session)
+
+
+@router.put("/local-ai/settings", response_model=LocalAISettingsRead)
+def put_local_ai_settings(settings: LocalAISettingsUpdate, session: Session = Depends(get_session)):
+    return update_ai_settings(session, settings.dict(exclude_unset=True))
 
 
 @router.post("/local-ai/test-connection", response_model=LocalAITestConnectionRead)

@@ -35,6 +35,8 @@ from ..config import (
 )
 from ..models import AIGradingPipelineRun, AnalysisAsset, AnalysisRun, Card, CardMedia, OwnedCard
 from .image_preprocessing import preprocess_owned_card, processed_payload
+from .grading_parser import normalize_final_grading_result, parse_grade_range, parse_grade_value
+from .ai_settings import get_ai_settings
 from .local_ai import (
     LOCAL_AI_RESPONSE_FORMAT,
     LOCAL_AI_TEMPERATURE,
@@ -49,7 +51,6 @@ from .local_ai import (
     require_local_ai_enabled,
     save_text_asset,
     select_preferred_vision_model,
-    score_value,
 )
 
 logger = logging.getLogger(__name__)
@@ -119,7 +120,15 @@ def image_url_for_ai(asset: AnalysisAsset, max_long_side: int) -> dict[str, Any]
     }
 
 
-def resolve_server_local_model() -> str:
+def requested_model_from_settings(settings: dict[str, Any] | None = None) -> str:
+    model_name = str((settings or {}).get("ai_model") or LOCAL_AI_MODEL_NAME or "").strip()
+    return "" if model_name.lower() == "auto" else model_name
+
+
+def resolve_server_local_model(settings: dict[str, Any] | None = None) -> str:
+    requested_model = requested_model_from_settings(settings)
+    if requested_model:
+        return requested_model
     if LOCAL_AI_MODEL_NAME and LOCAL_AI_MODEL_NAME.lower() != "auto":
         return LOCAL_AI_MODEL_NAME
     response = http_json("GET", f"{LOCAL_AI_BASE_URL.rstrip('/')}/models", timeout_seconds=LOCAL_AI_CONNECT_TIMEOUT_SECONDS)
@@ -143,7 +152,10 @@ def remote_worker_status() -> dict[str, Any]:
     raise HTTPException(status_code=502, detail=f"Remote Local AI worker is not reachable: {last_error}")
 
 
-def resolve_remote_worker_model() -> str:
+def resolve_remote_worker_model(settings: dict[str, Any] | None = None) -> str:
+    requested_model = requested_model_from_settings(settings)
+    if requested_model:
+        return requested_model
     if LOCAL_AI_MODEL_NAME and LOCAL_AI_MODEL_NAME.lower() != "auto":
         return LOCAL_AI_MODEL_NAME
     status = remote_worker_status()
@@ -234,8 +246,9 @@ def phase_a_assets(assets: dict[str, AnalysisAsset]) -> list[AnalysisAsset]:
     return [assets[label] for label in labels if label in assets]
 
 
-def phase_b_assets(assets: dict[str, AnalysisAsset]) -> list[AnalysisAsset]:
-    if not SEND_DIAGNOSTIC_IMAGES_TO_AI:
+def phase_b_assets(assets: dict[str, AnalysisAsset], settings: dict[str, Any] | None = None) -> list[AnalysisAsset]:
+    send_diagnostic = bool((settings or {}).get("send_diagnostic_images", SEND_DIAGNOSTIC_IMAGES_TO_AI))
+    if not send_diagnostic:
         labels = ["front_original", "back_original"]
     else:
         labels = [
@@ -405,8 +418,9 @@ def safe_max_tokens(requested: int, phase: str) -> int:
     return LOCAL_AI_MAX_TOKENS
 
 
-def wrap_prompt(prompt: str) -> str:
-    if not LOCAL_AI_DISABLE_THINKING:
+def wrap_prompt(prompt: str, settings: dict[str, Any] | None = None) -> str:
+    disable_thinking = bool((settings or {}).get("disable_thinking", LOCAL_AI_DISABLE_THINKING))
+    if not disable_thinking:
         return prompt
     return (
         "Do not think step by step. Do not output hidden reasoning. "
@@ -415,8 +429,8 @@ def wrap_prompt(prompt: str) -> str:
     )
 
 
-def call_server_local_json(prompt: str, assets: list[AnalysisAsset], max_tokens: int, phase: str) -> tuple[dict[str, Any], str, bool]:
-    model_name = resolve_server_local_model()
+def call_server_local_json(prompt: str, assets: list[AnalysisAsset], max_tokens: int, phase: str, settings: dict[str, Any]) -> tuple[dict[str, Any], str, bool]:
+    model_name = resolve_server_local_model(settings)
     token_limit = safe_max_tokens(max_tokens, phase)
     if AI_MAX_CONTEXT_TOKENS:
         logger.warning(
@@ -424,19 +438,27 @@ def call_server_local_json(prompt: str, assets: list[AnalysisAsset], max_tokens:
             phase,
             AI_MAX_CONTEXT_TOKENS,
         )
-    content: list[dict[str, Any]] = [{"type": "text", "text": wrap_prompt(prompt)}]
+    content: list[dict[str, Any]] = [{"type": "text", "text": wrap_prompt(prompt, settings)}]
     content.extend(image_url_for_ai(asset, phase_max_long_side(phase)) for asset in assets)
     payload = {
         "model": model_name,
         "messages": [{"role": "user", "content": content}],
-        "temperature": LOCAL_AI_TEMPERATURE,
+        "temperature": float(settings.get("temperature", LOCAL_AI_TEMPERATURE)),
         "max_tokens": token_limit,
         "response_format": LOCAL_AI_RESPONSE_FORMAT,
         "stream": LOCAL_AI_STREAMING_ENABLED,
     }
     endpoint = f"{LOCAL_AI_BASE_URL.rstrip('/')}/chat/completions"
     size = payload_size_bytes(payload)
-    logger.info("%s AI request model=%s endpoint=%s images=%s payload_bytes=%s", phase, model_name, endpoint, len(assets), size)
+    logger.info(
+        "%s AI request model=%s endpoint=%s images=%s response_format=%s payload_bytes=%s",
+        phase,
+        model_name,
+        endpoint,
+        len(assets),
+        LOCAL_AI_RESPONSE_FORMAT.get("type"),
+        size,
+    )
     try:
         response = http_json("POST", endpoint, payload, timeout_seconds=LOCAL_AI_READ_TIMEOUT_SECONDS)
     except (BrokenPipeError, urllib.error.URLError, TimeoutError, OSError) as exc:
@@ -458,14 +480,14 @@ def call_server_local_json(prompt: str, assets: list[AnalysisAsset], max_tokens:
     return extract_first_json_object(content_text), json_dumps(response), parsed_from_reasoning
 
 
-def call_remote_worker_json(prompt: str, assets: list[AnalysisAsset], max_tokens: int, phase: str) -> tuple[dict[str, Any], str, bool]:
+def call_remote_worker_json(prompt: str, assets: list[AnalysisAsset], max_tokens: int, phase: str, settings: dict[str, Any]) -> tuple[dict[str, Any], str, bool]:
     if not LOCAL_AI_WORKER_BASE_URL.strip():
         raise HTTPException(status_code=400, detail="LOCAL_AI_WORKER_BASE_URL is not configured.")
-    model_name = resolve_remote_worker_model()
+    model_name = resolve_remote_worker_model(settings)
     token_limit = max_tokens
     images = [encode_asset_for_ai(asset, phase_max_long_side(phase)) for asset in assets]
     payload = {
-        "prompt": wrap_prompt(prompt),
+        "prompt": wrap_prompt(prompt, settings),
         "images": images,
         "max_tokens": token_limit,
         "response_format": "text",
@@ -475,7 +497,7 @@ def call_remote_worker_json(prompt: str, assets: list[AnalysisAsset], max_tokens
     }
     endpoint = f"{LOCAL_AI_WORKER_BASE_URL.rstrip('/')}/api/ai/vision-json"
     size = payload_size_bytes(payload)
-    logger.info("%s remote AI request model=%s endpoint=%s images=%s payload_bytes=%s", phase, model_name, endpoint, len(images), size)
+    logger.info("%s remote AI request model=%s endpoint=%s images=%s response_format=text payload_bytes=%s", phase, model_name, endpoint, len(images), size)
     try:
         response = http_json(
             "POST",
@@ -521,31 +543,32 @@ def call_remote_worker_json(prompt: str, assets: list[AnalysisAsset], max_tokens
     return result, json_dumps(response), False
 
 
-def call_phase_json(prompt: str, assets: list[AnalysisAsset], max_tokens: int, phase: str) -> tuple[dict[str, Any], str, bool]:
+def call_phase_json(prompt: str, assets: list[AnalysisAsset], max_tokens: int, phase: str, settings: dict[str, Any]) -> tuple[dict[str, Any], str, bool]:
     require_local_ai_enabled()
     if LOCAL_AI_MODE == "server_local":
-        return call_server_local_json(prompt, assets, max_tokens, phase)
+        return call_server_local_json(prompt, assets, max_tokens, phase, settings)
     if LOCAL_AI_MODE == "remote_worker":
-        return call_remote_worker_json(prompt, assets, max_tokens, phase)
+        return call_remote_worker_json(prompt, assets, max_tokens, phase, settings)
     raise HTTPException(status_code=400, detail="Local AI is disabled.")
 
 
-def pipeline_model_parameters() -> dict[str, Any]:
+def pipeline_model_parameters(settings: dict[str, Any] | None = None) -> dict[str, Any]:
+    settings = settings or {}
     return {
         "provider": LOCAL_AI_PROVIDER if LOCAL_AI_MODE != "remote_worker" else "remote_worker",
         "mode": LOCAL_AI_MODE,
-        "model_name": LOCAL_AI_MODEL_NAME or "auto",
-        "temperature": LOCAL_AI_TEMPERATURE,
-        "phase_a_max_output_tokens": min(AI_PHASE_A_MAX_OUTPUT_TOKENS, LOCAL_AI_MAX_TOKENS),
-        "phase_b_max_output_tokens": min(AI_PHASE_B_MAX_OUTPUT_TOKENS, LOCAL_AI_MAX_TOKENS),
-        "requested_context_tokens": AI_MAX_CONTEXT_TOKENS,
-        "send_diagnostic_images_to_ai": SEND_DIAGNOSTIC_IMAGES_TO_AI,
-        "disable_thinking": LOCAL_AI_DISABLE_THINKING,
+        "model_name": settings.get("ai_model") or LOCAL_AI_MODEL_NAME or "auto",
+        "temperature": settings.get("temperature", LOCAL_AI_TEMPERATURE),
+        "phase_a_max_output_tokens": min(int(settings.get("phase_a_tokens", AI_PHASE_A_MAX_OUTPUT_TOKENS)), LOCAL_AI_MAX_TOKENS),
+        "phase_b_max_output_tokens": min(int(settings.get("phase_b_tokens", AI_PHASE_B_MAX_OUTPUT_TOKENS)), LOCAL_AI_MAX_TOKENS),
+        "requested_context_tokens": int(settings.get("context_tokens", AI_MAX_CONTEXT_TOKENS)),
+        "send_diagnostic_images_to_ai": bool(settings.get("send_diagnostic_images", SEND_DIAGNOSTIC_IMAGES_TO_AI)),
+        "disable_thinking": bool(settings.get("disable_thinking", LOCAL_AI_DISABLE_THINKING)),
         "stream": LOCAL_AI_STREAMING_ENABLED,
     }
 
 
-def create_pipeline_records(session: Session, owned_card: OwnedCard, selected_model_name: str) -> tuple[AnalysisRun, AIGradingPipelineRun]:
+def create_pipeline_records(session: Session, owned_card: OwnedCard, selected_model_name: str, settings: dict[str, Any]) -> tuple[AnalysisRun, AIGradingPipelineRun]:
     analysis_run = AnalysisRun(
         owned_card_id=owned_card.id,
         mode="two_phase_ai_grade",
@@ -554,7 +577,7 @@ def create_pipeline_records(session: Session, owned_card: OwnedCard, selected_mo
         model_name=selected_model_name,
         prompt_version=f"{PHASE_A_PROMPT_VERSION}+{PHASE_B_PROMPT_VERSION}",
         analysis_version=PIPELINE_VERSION,
-        model_parameters_json=json.dumps({**pipeline_model_parameters(), "model_name": selected_model_name}, ensure_ascii=True),
+        model_parameters_json=json.dumps({**pipeline_model_parameters(settings), "model_name": selected_model_name}, ensure_ascii=True),
         analysis_scope="full",
     )
     session.add(analysis_run)
@@ -567,7 +590,7 @@ def create_pipeline_records(session: Session, owned_card: OwnedCard, selected_mo
         status="running",
         phase_a_status="pending",
         phase_b_status="pending",
-        model_parameters_json=json.dumps({**pipeline_model_parameters(), "model_name": selected_model_name}, ensure_ascii=True),
+        model_parameters_json=json.dumps({**pipeline_model_parameters(settings), "model_name": selected_model_name}, ensure_ascii=True),
     )
     session.add(pipeline)
     session.commit()
@@ -578,20 +601,16 @@ def create_pipeline_records(session: Session, owned_card: OwnedCard, selected_mo
 def update_analysis_run_from_final(analysis_run: AnalysisRun, final_result: dict[str, Any]) -> None:
     subgrades = final_result.get("subgrades") if isinstance(final_result.get("subgrades"), dict) else {}
     analysis_run.status = "completed"
-    analysis_run.overall_score = score_value(final_result.get("estimated_grade"))
-    grade_range = str(final_result.get("grade_range") or "")
-    if "-" in grade_range:
-        low, high = grade_range.split("-", 1)
-        analysis_run.estimated_grade_low = low.strip()
-        analysis_run.estimated_grade_high = high.strip()
-    else:
-        analysis_run.estimated_grade_low = grade_range or None
-        analysis_run.estimated_grade_high = grade_range or None
+    analysis_run.overall_score = parse_grade_value(final_result.get("overall_score") or final_result.get("estimated_grade"))
+    low, high, _warnings = parse_grade_range(final_result.get("grade_range"), analysis_run.overall_score)
+    analysis_run.estimated_grade_low = low
+    analysis_run.estimated_grade_high = high
     analysis_run.confidence_level = str(final_result.get("confidence") or "low")
-    analysis_run.centering_score = score_value(subgrades.get("centering"))
-    analysis_run.corners_score = score_value(subgrades.get("corners"))
-    analysis_run.edges_score = score_value(subgrades.get("edges"))
-    analysis_run.surface_score = score_value(subgrades.get("surface"))
+    parsed_subgrades = final_result.get("parsed_subgrades") if isinstance(final_result.get("parsed_subgrades"), dict) else {}
+    analysis_run.centering_score = parse_grade_value(parsed_subgrades.get("centering") or subgrades.get("centering"))
+    analysis_run.corners_score = parse_grade_value(parsed_subgrades.get("corners") or subgrades.get("corners"))
+    analysis_run.edges_score = parse_grade_value(parsed_subgrades.get("edges") or subgrades.get("edges"))
+    analysis_run.surface_score = parse_grade_value(parsed_subgrades.get("surface") or subgrades.get("surface"))
     analysis_run.human_summary = final_result.get("reasoning_summary")
     analysis_run.recommendation = final_result.get("recommended_action")
     analysis_run.recommendation_reason = "; ".join(final_result.get("risk_flags") or [])[:500]
@@ -607,21 +626,24 @@ def run_phase_b(
     assets: dict[str, AnalysisAsset],
     preprocessing: dict[str, Any],
     phase_a_result: dict[str, Any],
+    settings: dict[str, Any],
 ) -> dict[str, Any]:
     pipeline.phase_b_status = "running"
     pipeline.updated_at = datetime.utcnow()
     session.add(pipeline)
     session.commit()
 
-    selected_assets = phase_b_assets(assets)
+    selected_assets = phase_b_assets(assets, settings)
     if not selected_assets:
         raise ValueError("Phase B has no images to send.")
     result, raw_response, parsed_from_reasoning = call_phase_json(
         phase_b_prompt(owned_card, card, preprocessing, phase_a_result),
         selected_assets,
-        AI_PHASE_B_MAX_OUTPUT_TOKENS,
+        min(int(settings.get("phase_b_tokens", AI_PHASE_B_MAX_OUTPUT_TOKENS)), LOCAL_AI_MAX_TOKENS),
         "Phase B",
+        settings,
     )
+    result = normalize_final_grading_result(result)
     result["parsed_from_reasoning_content"] = parsed_from_reasoning
     result["images_sent"] = [asset.label for asset in selected_assets]
     save_text_asset(session, analysis_run.id, "phase16_ai_phase_b_raw", "phase_b_raw_response", "phase_b_raw_response.json", raw_response)
@@ -653,12 +675,13 @@ def run_two_phase_ai_grading(session: Session, owned_card_id: int) -> dict[str, 
         raise HTTPException(status_code=404, detail="Card not found")
 
     require_local_ai_enabled()
-    selected_model_name = resolve_remote_worker_model() if LOCAL_AI_MODE == "remote_worker" else resolve_server_local_model()
+    settings = get_ai_settings(session)
+    selected_model_name = resolve_remote_worker_model(settings) if LOCAL_AI_MODE == "remote_worker" else resolve_server_local_model(settings)
     logger.info("Starting two-phase AI grading owned_card_id=%s selected_model=%s mode=%s", owned_card_id, selected_model_name, LOCAL_AI_MODE)
     preprocessing = preprocess_owned_card(session, owned_card_id) if ENABLE_IMAGE_PREPROCESSING else processed_payload(session, owned_card_id)
-    analysis_run, pipeline = create_pipeline_records(session, owned_card, selected_model_name)
+    analysis_run, pipeline = create_pipeline_records(session, owned_card, selected_model_name, settings)
     warnings: list[str] = []
-    if not SEND_DIAGNOSTIC_IMAGES_TO_AI:
+    if not bool(settings.get("send_diagnostic_images", SEND_DIAGNOSTIC_IMAGES_TO_AI)):
         warnings.append("diagnostic_images_disabled")
     if not preprocessing.get("sides"):
         warnings.append("preprocessing_unavailable")
@@ -678,8 +701,9 @@ def run_two_phase_ai_grading(session: Session, owned_card_id: int) -> dict[str, 
         phase_a_result, phase_a_raw, parsed_from_reasoning = call_phase_json(
             phase_a_prompt(owned_card, card, preprocessing),
             phase_a_selected,
-            AI_PHASE_A_MAX_OUTPUT_TOKENS,
+            min(int(settings.get("phase_a_tokens", AI_PHASE_A_MAX_OUTPUT_TOKENS)), LOCAL_AI_MAX_TOKENS),
             "Phase A",
+            settings,
         )
         phase_a_result["parsed_from_reasoning_content"] = parsed_from_reasoning
         phase_a_result["images_sent"] = [asset.label for asset in phase_a_selected]
@@ -691,7 +715,7 @@ def run_two_phase_ai_grading(session: Session, owned_card_id: int) -> dict[str, 
         pipeline.updated_at = datetime.utcnow()
         session.add(pipeline)
         session.commit()
-        phase_b_result = run_phase_b(session, pipeline, analysis_run, owned_card, card, assets, preprocessing, phase_a_result)
+        phase_b_result = run_phase_b(session, pipeline, analysis_run, owned_card, card, assets, preprocessing, phase_a_result, settings)
 
         return {
             "ok": True,
@@ -774,14 +798,15 @@ def retry_phase_b(session: Session, owned_card_id: int) -> dict[str, Any]:
     analysis_run = session.get(AnalysisRun, pipeline.analysis_run_id) if pipeline.analysis_run_id else None
     if analysis_run is None:
         raise HTTPException(status_code=404, detail="Pipeline analysis run not found.")
-    selected_model_name = resolve_remote_worker_model() if LOCAL_AI_MODE == "remote_worker" else resolve_server_local_model()
+    settings = get_ai_settings(session)
+    selected_model_name = resolve_remote_worker_model(settings) if LOCAL_AI_MODE == "remote_worker" else resolve_server_local_model(settings)
     analysis_run.model_name = selected_model_name
-    pipeline.model_parameters_json = json.dumps({**pipeline_model_parameters(), "model_name": selected_model_name}, ensure_ascii=True)
+    pipeline.model_parameters_json = json.dumps({**pipeline_model_parameters(settings), "model_name": selected_model_name}, ensure_ascii=True)
     preprocessing = preprocess_owned_card(session, owned_card_id) if ENABLE_IMAGE_PREPROCESSING else processed_payload(session, owned_card_id)
     assets = create_assets_for_pipeline(session, analysis_run.id, owned_card_id, preprocessing)
     phase_a_result = json_loads(pipeline.phase_a_result_json, {})
     try:
-        final_result = run_phase_b(session, pipeline, analysis_run, owned_card, card, assets, preprocessing, phase_a_result)
+        final_result = run_phase_b(session, pipeline, analysis_run, owned_card, card, assets, preprocessing, phase_a_result, settings)
     except Exception as exc:
         pipeline.phase_b_status = "failed"
         pipeline.status = "phase_b_failed"
