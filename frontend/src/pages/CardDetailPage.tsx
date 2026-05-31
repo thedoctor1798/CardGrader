@@ -1,4 +1,4 @@
-import { Crop, Play, RefreshCw, RotateCcw, Save, Trash2, Upload, X } from "lucide-react";
+import { Crop, Minus, Play, Plus, RefreshCw, RotateCcw, Save, Trash2, Upload, X } from "lucide-react";
 import { FormEvent, useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { PointerEvent, ReactNode, WheelEvent } from "react";
 import { CartesianGrid, Line, LineChart, ResponsiveContainer, Tooltip, XAxis, YAxis } from "recharts";
@@ -52,13 +52,13 @@ const mediaLabels = [
 const statuses = ["raw_owned", "graded_owned", "sent_to_grading", "listed_for_sale", "sold", "kept_long_term"];
 const sources = ["pack", "blister", "single_purchase", "trade", "unknown"];
 const processedVariantOptions = [
-  ["original_normalized", "Original", "Normal image prepared for review."],
+  ["perspective_corrected", "Normalized", "Perspective corrected grading view."],
+  ["original_normalized", "Original", "Original uploaded image."],
   ["grayscale_clahe", "CLAHE", "Contrast-enhanced grayscale."],
-  ["sobel_edges", "Sobel", "Edges and fine lines."],
-  ["emboss_surface", "Emboss", "Surface dents and scratch texture."],
-  ["highpass_texture", "High Pass", "Micro texture and scratches."],
-  ["canny_edges", "Canny", "Contour and edge detection."],
-  ["perspective_corrected", "Normalized", "Perspective-corrected card crop."],
+  ["sobel_edges", "Sobel", "Edge and line emphasis."],
+  ["emboss_surface", "Emboss", "Surface texture visualization."],
+  ["highpass_texture", "High Pass", "Micro texture and scratch enhancement."],
+  ["canny_edges", "Canny", "Contour detection."],
   ["centering_debug", "Centering Debug", "Measurement overlay."],
 ] as const;
 
@@ -717,12 +717,13 @@ export function CardDetailPage({ ownedCardId, debugMode, onDeleted }: CardDetail
   const [previewAsset, setPreviewAsset] = useState<AnalysisAsset | CardMedia | null>(null);
   const [selectedPreviewSide, setSelectedPreviewSide] = useState<"front" | "back">("front");
   const [selectedProcessedSide, setSelectedProcessedSide] = useState<"front" | "back">("front");
-  const [selectedProcessedVariant, setSelectedProcessedVariant] = useState("original_normalized");
+  const [selectedProcessedVariant, setSelectedProcessedVariant] = useState("perspective_corrected");
   const [boundaryEditorSide, setBoundaryEditorSide] = useState<"front" | "back" | null>(null);
   const [showCenteringEditor, setShowCenteringEditor] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [aiGradingModalOpen, setAIGradingModalOpen] = useState(false);
   const [aiGradingModalError, setAIGradingModalError] = useState<string | null>(null);
+  const [fullscreenImage, setFullscreenImage] = useState<{ src: string; label: string; description?: string } | null>(null);
 
   const busy = busyLabel !== null;
   const workOverlay = workOverlayForLabel(busyLabel);
@@ -892,6 +893,7 @@ export function CardDetailPage({ ownedCardId, debugMode, onDeleted }: CardDetail
   const processedSides = processedImages?.sides ?? {};
   const selectedProcessed = processedSides[selectedProcessedSide] ?? processedSides.front ?? processedSides.back ?? null;
   const processedVariantPath = selectedProcessed?.generated_images?.[selectedProcessedVariant]
+    ?? selectedProcessed?.generated_images?.perspective_corrected
     ?? selectedProcessed?.generated_images?.original_normalized
     ?? null;
 
@@ -911,8 +913,8 @@ export function CardDetailPage({ ownedCardId, debugMode, onDeleted }: CardDetail
     if (selectedProcessedSide === "back" && !processedSides.back && processedSides.front) {
       setSelectedProcessedSide("front");
     }
-    if (selectedProcessed && !selectedProcessed.generated_images[selectedProcessedVariant]) {
-      setSelectedProcessedVariant("original_normalized");
+  if (selectedProcessed && !selectedProcessed.generated_images[selectedProcessedVariant]) {
+      setSelectedProcessedVariant(selectedProcessed.generated_images.perspective_corrected ? "perspective_corrected" : "original_normalized");
     }
   }, [processedSides.back, processedSides.front, selectedProcessed, selectedProcessedSide, selectedProcessedVariant]);
 
@@ -1980,6 +1982,9 @@ export function CardDetailPage({ ownedCardId, debugMode, onDeleted }: CardDetail
                 onSelectVariant={setSelectedProcessedVariant}
                 onOpenBoundary={(side) => setBoundaryEditorSide(side)}
                 onRecalculate={recalculateSmartCentering}
+                debugMode={debugMode}
+                centeringMeasurements={centeringMeasurements}
+                onOpenImage={(src, label, description) => setFullscreenImage({ src, label, description })}
               />
             </details>
             {debugMode && <details className="mt-4 rounded-lg border border-slate-800 bg-slate-950/25 p-3">
@@ -2266,19 +2271,20 @@ export function CardDetailPage({ ownedCardId, debugMode, onDeleted }: CardDetail
       {genericWorkOverlay && <GlobalLoadingOverlay title={genericWorkOverlay.title} subtitle={genericWorkOverlay.subtitle} steps={genericWorkOverlay.steps} />}
 
       {previewAsset && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 p-4" onClick={() => setPreviewAsset(null)}>
-          <div className="max-h-[92vh] w-full max-w-5xl overflow-hidden rounded-xl border border-slate-700 bg-charcoal-900" onClick={(event) => event.stopPropagation()}>
-            <div className="flex items-center justify-between border-b border-slate-800 px-4 py-3">
-              <div className="text-sm font-medium text-slate-100">{previewAsset.label ?? "Preview"}</div>
-              <button className="rounded-lg p-2 text-slate-400 hover:bg-slate-800 hover:text-slate-100" onClick={() => setPreviewAsset(null)} type="button">
-                <X size={18} />
-              </button>
-            </div>
-            <div className="p-4">
-              <img className="mx-auto max-h-[78vh] rounded-lg object-contain" src={mediaUrl(previewAsset.file_path, cacheKeyFor(previewAsset))} alt={previewAsset.label ?? "preview"} />
-            </div>
-          </div>
-        </div>
+        <FullscreenImageViewer
+          src={mediaUrl(previewAsset.file_path, cacheKeyFor(previewAsset))}
+          label={previewAsset.label ?? "Preview"}
+          onClose={() => setPreviewAsset(null)}
+        />
+      )}
+
+      {fullscreenImage && (
+        <FullscreenImageViewer
+          src={fullscreenImage.src}
+          label={fullscreenImage.label}
+          description={fullscreenImage.description}
+          onClose={() => setFullscreenImage(null)}
+        />
       )}
 
       {showDeleteConfirm && (
@@ -2317,6 +2323,68 @@ function InlineNotice({ notice, scope }: { notice: InlineNoticeState | null; sco
     ? "border-emerald-500/30 bg-emerald-500/10 text-emerald-200"
     : "border-rose-500/30 bg-rose-500/10 text-rose-200";
   return <div className={`mt-3 rounded-lg border p-3 text-sm ${classes}`}>{notice.text}</div>;
+}
+
+function FullscreenImageViewer({ src, label, description, onClose }: { src: string; label: string; description?: string; onClose: () => void }) {
+  const [zoom, setZoom] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [dragStart, setDragStart] = useState<{ x: number; y: number; offsetX: number; offsetY: number } | null>(null);
+  const clampZoom = (next: number) => Math.max(1, Math.min(4, next));
+  const updateZoom = (next: number) => {
+    const clamped = clampZoom(next);
+    setZoom(clamped);
+    if (clamped === 1) setOffset({ x: 0, y: 0 });
+  };
+  const startDrag = (event: PointerEvent<HTMLDivElement>) => {
+    if (zoom <= 1) return;
+    event.currentTarget.setPointerCapture(event.pointerId);
+    setDragStart({ x: event.clientX, y: event.clientY, offsetX: offset.x, offsetY: offset.y });
+  };
+  const moveDrag = (event: PointerEvent<HTMLDivElement>) => {
+    if (!dragStart || zoom <= 1) return;
+    setOffset({
+      x: dragStart.offsetX + event.clientX - dragStart.x,
+      y: dragStart.offsetY + event.clientY - dragStart.y,
+    });
+  };
+  return (
+    <div className="fixed inset-0 z-[90] flex items-center justify-center bg-black/88 p-2 backdrop-blur-md sm:p-4" onClick={onClose}>
+      <div className="flex h-full w-full max-w-7xl flex-col overflow-hidden rounded-2xl border border-white/10 bg-slate-950/90" onClick={(event) => event.stopPropagation()}>
+        <div className="flex flex-wrap items-center justify-between gap-3 border-b border-white/10 px-3 py-2 sm:px-4">
+          <div className="min-w-0">
+            <div className="truncate text-sm font-semibold text-slate-100">{label}</div>
+            {description && <div className="text-xs text-slate-400">{description}</div>}
+          </div>
+          <div className="flex items-center gap-2">
+            <button className="rounded-lg border border-white/10 p-2 text-slate-200 hover:bg-white/10" onClick={() => updateZoom(zoom - 0.25)} type="button" aria-label="Zoom out"><Minus size={17} /></button>
+            <div className="min-w-12 text-center text-xs text-slate-300">{Math.round(zoom * 100)}%</div>
+            <button className="rounded-lg border border-white/10 p-2 text-slate-200 hover:bg-white/10" onClick={() => updateZoom(zoom + 0.25)} type="button" aria-label="Zoom in"><Plus size={17} /></button>
+            <button className="rounded-lg border border-white/10 px-3 py-2 text-xs font-semibold text-slate-200 hover:bg-white/10" onClick={() => { setZoom(1); setOffset({ x: 0, y: 0 }); }} type="button">Reset</button>
+            <button className="rounded-lg p-2 text-slate-300 hover:bg-white/10 hover:text-white" onClick={onClose} type="button" aria-label="Close preview"><X size={18} /></button>
+          </div>
+        </div>
+        <div
+          className={`flex flex-1 touch-none items-center justify-center overflow-hidden bg-black/35 ${zoom > 1 ? "cursor-grab active:cursor-grabbing" : "cursor-zoom-in"}`}
+          onClick={(event) => {
+            event.stopPropagation();
+            if (zoom === 1) updateZoom(2);
+          }}
+          onPointerDown={startDrag}
+          onPointerMove={moveDrag}
+          onPointerUp={() => setDragStart(null)}
+          onPointerCancel={() => setDragStart(null)}
+        >
+          <img
+            className="max-h-full max-w-full select-none object-contain transition-transform duration-150"
+            src={src}
+            alt={label}
+            draggable={false}
+            style={{ transform: `translate(${offset.x}px, ${offset.y}px) scale(${zoom})` }}
+          />
+        </div>
+      </div>
+    </div>
+  );
 }
 
 function CenteringMeasurementSummary({ measurement }: { measurement: CenteringMeasurement }) {
@@ -2874,6 +2942,9 @@ function ProcessedDiagnosticsPanel({
   onSelectVariant,
   onOpenBoundary,
   onRecalculate,
+  debugMode,
+  centeringMeasurements,
+  onOpenImage,
 }: {
   processed: ProcessedImagesResponse | null;
   selectedSide: "front" | "back";
@@ -2882,22 +2953,31 @@ function ProcessedDiagnosticsPanel({
   onSelectVariant: (variant: string) => void;
   onOpenBoundary: (side: "front" | "back") => void;
   onRecalculate: (side: "front" | "back") => void;
+  debugMode: boolean;
+  centeringMeasurements: CenteringMeasurement[];
+  onOpenImage: (src: string, label: string, description?: string) => void;
 }) {
   const sides = processed?.sides ?? {};
   const side = sides[selectedSide] ?? sides.front ?? sides.back ?? null;
-  const imagePath = side?.generated_images?.[selectedVariant] ?? side?.generated_images?.original_normalized;
+  const imagePath = side?.generated_images?.[selectedVariant] ?? side?.generated_images?.perspective_corrected ?? side?.generated_images?.original_normalized;
   const selectedVariantInfo = processedVariantOptions.find(([key]) => key === selectedVariant);
+  const sideName = selectedSide === "front" ? "Front" : "Back";
+  const imageLabel = `${sideName} ${selectedVariantInfo?.[1] ?? selectedVariant}`;
+  const history = centeringMeasurements.filter((measurement) => measurement.side === selectedSide).slice(0, 4);
   if (!processed || Object.keys(sides).length === 0) {
     return <EmptyState label="No Phase 16 processed images yet." />;
   }
   return (
-    <div className="mt-4 space-y-4">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <SegmentedControl
-          options={(["front", "back"] as const).map((item) => ({ value: item, label: item === "front" ? "Front" : "Back", disabled: !sides[item] }))}
-          value={selectedSide}
-          onChange={onSelectSide}
-        />
+    <div className="mt-4 space-y-5">
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <div className="text-xs font-semibold uppercase text-slate-500">Selected side</div>
+          <SegmentedControl
+            options={(["front", "back"] as const).map((item) => ({ value: item, label: item === "front" ? "Front processed" : "Back processed", disabled: !sides[item] }))}
+            value={selectedSide}
+            onChange={onSelectSide}
+          />
+        </div>
         {side && (
           <div className="flex flex-wrap gap-2">
             <button className="rounded-lg border border-cyan-500/40 px-3 py-2 text-sm text-cyan-100 hover:bg-cyan-500/10" onClick={() => onOpenBoundary(side.side as "front" | "back")} type="button">Adjust corners</button>
@@ -2905,11 +2985,11 @@ function ProcessedDiagnosticsPanel({
           </div>
         )}
       </div>
-      <div className="flex gap-2 overflow-x-auto pb-1">
+      <div className="flex gap-2 overflow-x-auto rounded-2xl border border-white/10 bg-slate-950/35 p-2">
         {processedVariantOptions.map(([key, label]) => (
           <button
             key={key}
-            className={`min-h-10 shrink-0 rounded-xl border px-3 py-2 text-xs font-medium ${selectedVariant === key ? "border-blue-400/40 bg-blue-500/15 text-blue-100" : "border-white/10 text-slate-300 hover:bg-white/10"} disabled:opacity-35`}
+            className={`min-h-11 shrink-0 rounded-xl border px-3 py-2 text-xs font-semibold ${selectedVariant === key ? "border-cyan-300/45 bg-cyan-300/15 text-cyan-50 shadow-[0_0_18px_rgba(103,232,249,0.18)]" : "border-white/10 text-slate-300 hover:bg-white/10"} disabled:opacity-35`}
             disabled={!side?.generated_images?.[key]}
             onClick={() => onSelectVariant(key)}
             type="button"
@@ -2918,18 +2998,66 @@ function ProcessedDiagnosticsPanel({
           </button>
         ))}
       </div>
-      {selectedVariantInfo && <p className="text-xs leading-5 text-slate-500">{selectedVariantInfo[2]}</p>}
-      {imagePath ? (
-        <img className="max-h-[520px] w-full rounded-lg border border-slate-800 object-contain bg-slate-950" src={mediaUrl(imagePath, side?.updated_at)} alt={selectedVariant} />
-      ) : (
-        <EmptyState label="Selected diagnostic image is not available." />
-      )}
+      <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_280px]">
+        <div className="overflow-hidden rounded-2xl border border-white/10 bg-slate-950">
+          <div className="flex flex-wrap items-center justify-between gap-2 border-b border-white/10 px-4 py-3">
+            <div>
+              <div className="text-sm font-semibold text-slate-50">{imageLabel}</div>
+              {selectedVariantInfo && <p className="text-xs leading-5 text-slate-400">{selectedVariantInfo[2]}</p>}
+            </div>
+            <div className="text-xs font-medium text-cyan-200">Click image to open fullscreen</div>
+          </div>
+          {imagePath ? (
+            <button className="block h-[58vh] min-h-[360px] w-full bg-black/25 p-3 sm:p-5" onClick={() => onOpenImage(mediaUrl(imagePath, side?.updated_at), imageLabel, selectedVariantInfo?.[2])} type="button">
+              <img className="h-full w-full object-contain" src={mediaUrl(imagePath, side?.updated_at)} alt={imageLabel} />
+            </button>
+          ) : (
+            <EmptyState label="Selected diagnostic image is not available." />
+          )}
+        </div>
+        <div className="space-y-3">
+          <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-3">
+            <div className="text-xs font-semibold uppercase text-slate-500">Image clarity</div>
+            <div className="mt-2 text-sm text-slate-200">{imageLabel}</div>
+            <div className="mt-1 text-xs text-slate-500">Switching side or tab always changes this labeled image only.</div>
+          </div>
+          {debugMode && (
+            <div className="rounded-2xl border border-cyan-300/20 bg-cyan-300/10 p-3 text-xs text-cyan-50">
+              <div className="font-semibold uppercase text-cyan-100">AI image usage</div>
+              <div className="mt-2 text-cyan-50">Phase A uses: front original, back original, centering JSON.</div>
+              <div className="mt-1 text-cyan-50">Phase B uses: emboss, high pass, sobel, working notes.</div>
+            </div>
+          )}
+        </div>
+      </div>
       {side && (
-        <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
-          <StatCard label="Boundary" value={`${side.card_boundary?.boundary_source ?? "-"} ${side.card_boundary?.confidence ?? "-"}`} />
-          <StatCard label="H ratio" value={side.centering?.horizontal_ratio ?? "-"} />
-          <StatCard label="V ratio" value={side.centering?.vertical_ratio ?? "-"} />
-          <StatCard label="Center conf" value={side.centering?.confidence !== undefined ? formatNumber(side.centering.confidence, 2) : "-"} />
+        <div className="rounded-2xl border border-white/10 bg-white/[0.035] p-3">
+          <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
+            <div>
+              <div className="text-sm font-semibold text-slate-100">Centering details</div>
+              <div className="text-xs text-slate-500">{sideName} processed centering data</div>
+            </div>
+            <div className="rounded-full border border-white/10 px-3 py-1 text-xs text-slate-300">source: {side.card_boundary?.boundary_source ?? "fallback"}</div>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-4">
+            <StatCard label="Confidence" value={side.centering?.confidence !== undefined ? formatNumber(side.centering.confidence, 2) : "-"} />
+            <StatCard label="Boundary confidence" value={side.card_boundary?.confidence !== undefined ? formatNumber(side.card_boundary.confidence, 2) : "-"} />
+            <StatCard label="H ratio" value={side.centering?.horizontal_ratio ?? "-"} />
+            <StatCard label="V ratio" value={side.centering?.vertical_ratio ?? "-"} />
+          </div>
+          {history.length > 0 && (
+            <div className="mt-3 rounded-xl border border-white/10 bg-slate-950/35 p-3">
+              <div className="mb-2 text-xs font-semibold uppercase text-slate-500">Correction history</div>
+              <div className="space-y-2">
+                {history.map((measurement) => (
+                  <div key={measurement.id} className="flex flex-wrap items-center justify-between gap-2 text-xs text-slate-300">
+                    <span>{measurement.source || "manual"} · {measurement.horizontal_ratio_label ?? "-"} / {measurement.vertical_ratio_label ?? "-"}</span>
+                    <span className="text-slate-500">{formatDate(measurement.updated_at)}</span>
+                  </div>
+                ))}
+              </div>
+            </div>
+          )}
         </div>
       )}
       {side?.warnings?.length ? (
