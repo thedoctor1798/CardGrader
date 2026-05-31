@@ -8,12 +8,12 @@ type GlobalLoadingOverlayProps = {
 
 export function GlobalLoadingOverlay({ title, subtitle, steps = [] }: GlobalLoadingOverlayProps) {
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-black/70 p-4 backdrop-blur-sm">
-      <div className="w-full max-w-md rounded-xl border border-slate-700/80 bg-charcoal-900/85 p-5 shadow-2xl shadow-black/50 ring-1 ring-white/5">
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-[#0d1117]/74 p-4 backdrop-blur-xl">
+      <div className="glass-surface w-full max-w-md p-5">
         <div className="flex items-start gap-4">
-          <div className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-xl border border-blue-400/30 bg-blue-500/10 text-blue-100">
+          <div className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl border border-cyan-300/30 bg-cyan-300/10 text-cyan-100 shadow-[0_0_32px_rgba(103,232,249,0.16)]">
             <ScanLine className="absolute animate-pulse" size={26} />
-            <Loader2 className="animate-spin text-blue-200/80" size={34} />
+            <Loader2 className="animate-spin text-cyan-200/80" size={34} />
           </div>
           <div className="min-w-0">
             <div className="text-xs font-semibold uppercase tracking-wide text-blue-200">Lokális feldolgozás</div>
@@ -23,10 +23,10 @@ export function GlobalLoadingOverlay({ title, subtitle, steps = [] }: GlobalLoad
         </div>
 
         {steps.length > 0 && (
-          <div className="mt-5 space-y-2 rounded-xl border border-slate-800 bg-slate-950/45 p-3">
+          <div className="control-surface mt-5 space-y-2 rounded-2xl p-3">
             {steps.map((step, index) => (
               <div key={`${step}-${index}`} className="flex items-center gap-2 text-xs text-slate-300">
-                <span className="h-1.5 w-1.5 rounded-full bg-blue-300 shadow-[0_0_12px_rgba(147,197,253,0.8)]" />
+                <span className="h-1.5 w-1.5 rounded-full bg-cyan-300 shadow-[0_0_12px_rgba(103,232,249,0.8)]" />
                 <span>{step}</span>
               </div>
             ))}

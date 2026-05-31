@@ -40,12 +40,12 @@ export function Topbar({ page, debugMode, onToggleDebugMode }: TopbarProps) {
   const copy = pageTitle[page];
 
   return (
-    <header className="sticky top-0 z-30 border-b border-white/10 bg-slate-950/70 px-3 py-3 backdrop-blur-2xl sm:px-6 lg:px-8">
+    <header className="sticky top-0 z-30 border-b border-white/10 bg-[#111722]/72 px-3 py-3 shadow-lg shadow-black/10 backdrop-blur-2xl sm:px-6 lg:px-8">
       <div className="mx-auto flex w-full max-w-[1900px] flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div className="flex min-w-0 items-center gap-3">
           <BrandLogo className="h-10 w-10 shrink-0 lg:hidden" />
           <div className="min-w-0">
-            <h1 className="truncate text-lg font-semibold text-slate-50 sm:text-xl">{copy.title}</h1>
+            <h1 className="truncate text-xl font-semibold text-slate-50 sm:text-2xl">{copy.title}</h1>
             <p className="mt-0.5 line-clamp-2 text-xs leading-5 text-slate-400 sm:text-sm">{copy.subtitle}</p>
           </div>
         </div>
@@ -57,8 +57,8 @@ export function Topbar({ page, debugMode, onToggleDebugMode }: TopbarProps) {
           <button
             className={`inline-flex min-h-9 items-center gap-1.5 rounded-full border px-3 text-xs font-semibold transition ${
               debugMode
-                ? "border-amber-300/40 bg-amber-300/12 text-amber-100"
-                : "border-white/10 bg-white/[0.04] text-slate-300 hover:bg-white/[0.08]"
+                ? "border-amber-300/40 bg-amber-300/14 text-amber-100 shadow-[0_0_24px_rgba(245,158,11,0.12)]"
+                : "glass-button text-slate-300"
             }`}
             onClick={onToggleDebugMode}
             type="button"

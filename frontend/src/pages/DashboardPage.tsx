@@ -80,15 +80,15 @@ export function DashboardPage() {
     <div className="space-y-6">
       <div className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
         <div>
-          <p className="text-xs font-semibold uppercase tracking-wide text-blue-300">Live summary</p>
-          <h2 className="mt-1 text-2xl font-semibold text-slate-50">Dashboard</h2>
+          <p className="page-kicker text-xs font-semibold uppercase tracking-wide">Live summary</p>
+          <h2 className="mt-1 text-3xl font-semibold text-slate-50 sm:text-4xl">Dashboard</h2>
           <p className="mt-1 text-sm text-slate-400">
             A felső kártyák élő adatot mutatnak, a grafikon pedig csak mentett snapshotokból épül.
           </p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button
-            className="inline-flex items-center gap-2 rounded-lg border border-slate-700 px-3 py-2 text-sm text-slate-200 hover:bg-slate-800"
+            className="glass-button inline-flex items-center gap-2 px-3 py-2 text-sm font-medium text-slate-200 disabled:opacity-50"
             disabled={busy}
             onClick={() => load()}
             type="button"
@@ -97,7 +97,7 @@ export function DashboardPage() {
             Frissítés
           </button>
           <button
-            className="inline-flex items-center gap-2 rounded-lg border border-emerald-500/40 px-3 py-2 text-sm text-emerald-100 hover:bg-emerald-500/10 disabled:opacity-60"
+            className="inline-flex items-center gap-2 rounded-[14px] border border-emerald-300/35 bg-emerald-400/14 px-3 py-2 text-sm font-medium text-emerald-100 hover:bg-emerald-400/20 disabled:opacity-50"
             disabled={busy}
             onClick={refreshOwnedPrices}
             type="button"
@@ -106,7 +106,7 @@ export function DashboardPage() {
             Árak frissítése
           </button>
           <button
-            className="inline-flex items-center gap-2 rounded-lg bg-blue-500 px-3 py-2 text-sm font-medium text-white hover:bg-blue-400 disabled:opacity-60"
+            className="gradient-primary inline-flex items-center gap-2 rounded-[14px] px-3 py-2 text-sm font-bold disabled:opacity-50"
             disabled={busy}
             onClick={createSnapshot}
             type="button"
@@ -181,15 +181,15 @@ export function DashboardPage() {
                 <AreaChart data={snapshots}>
                   <defs>
                     <linearGradient id="valueFill" x1="0" x2="0" y1="0" y2="1">
-                      <stop offset="5%" stopColor="#60a5fa" stopOpacity={0.45} />
-                      <stop offset="95%" stopColor="#60a5fa" stopOpacity={0.02} />
+                      <stop offset="5%" stopColor="#67e8f9" stopOpacity={0.42} />
+                      <stop offset="95%" stopColor="#2dd4bf" stopOpacity={0.03} />
                     </linearGradient>
                   </defs>
-                  <CartesianGrid stroke="#1f2937" strokeDasharray="3 3" />
-                  <XAxis dataKey="snapshot_date" tickFormatter={formatDate} stroke="#94a3b8" />
-                  <YAxis stroke="#94a3b8" tickFormatter={(value) => `${Math.round(Number(value) / 1000)}k`} />
+                  <CartesianGrid stroke="rgba(255,255,255,0.08)" strokeDasharray="3 3" />
+                  <XAxis dataKey="snapshot_date" tickFormatter={formatDate} stroke="#9ca3af" />
+                  <YAxis stroke="#9ca3af" tickFormatter={(value) => `${Math.round(Number(value) / 1000)}k`} />
                   <Tooltip
-                    contentStyle={{ background: "#111722", border: "1px solid #334155", borderRadius: 8 }}
+                    contentStyle={{ background: "rgba(21,27,36,0.92)", border: "1px solid rgba(255,255,255,0.14)", borderRadius: 16, boxShadow: "0 18px 42px rgba(0,0,0,0.35)" }}
                     formatter={(value) => formatHuf(Number(value))}
                     labelFormatter={(value) => formatDate(String(value))}
                   />
@@ -197,7 +197,7 @@ export function DashboardPage() {
                     dataKey="collection_value_huf"
                     fill="url(#valueFill)"
                     name="Gyűjtemény érték"
-                    stroke="#60a5fa"
+                    stroke="#67e8f9"
                     strokeWidth={2}
                     type="monotone"
                   />

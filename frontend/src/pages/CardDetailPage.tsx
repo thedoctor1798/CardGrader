@@ -486,14 +486,14 @@ function SmartGradePanel({ pipeline, debugMode, onRetryPhaseB }: { pipeline: AIG
   const phaseBFinished = pipeline.phase_b_status === "completed";
   const phaseBFailed = pipeline.phase_b_status === "failed" || pipeline.status === "phase_b_failed";
   return (
-    <div className="mt-4 rounded-2xl border border-emerald-400/25 bg-emerald-500/10 p-4 text-sm text-emerald-50">
+    <div className="glass-card mt-4 p-4 text-sm text-emerald-50">
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div>
           <div className="font-semibold">AI grading result</div>
           <div className="mt-1 text-xs opacity-80">Two-step workflow status: {pipeline.status}</div>
         </div>
         <div className="text-right">
-          <div className="text-4xl font-semibold leading-none">{displayFinalGrade(final)}</div>
+          <div className="metric-value text-5xl font-semibold leading-none text-slate-50">{displayFinalGrade(final)}</div>
           <div className="text-xs opacity-80">Final estimate</div>
         </div>
       </div>
@@ -511,14 +511,14 @@ function SmartGradePanel({ pipeline, debugMode, onRetryPhaseB }: { pipeline: AIG
           <StatCard label="Surface" value={displaySubgrade(final.subgrades.surface)} />
         </div>
       )}
-      {final?.reasoning_summary && <div className="mt-3 rounded-lg border border-slate-800 bg-slate-950/30 p-3 text-slate-100">{final.reasoning_summary}</div>}
+      {final?.reasoning_summary && <div className="mt-3 rounded-2xl border border-white/10 bg-[#0d1117]/38 p-3 text-slate-100">{final.reasoning_summary}</div>}
       {final?.risk_flags?.length ? (
         <div className="mt-3 flex flex-wrap gap-2">
           {final.risk_flags.map((flag) => <StatusBadge key={flag} tone="warning">{flag}</StatusBadge>)}
         </div>
       ) : null}
       {final?.recommended_action && (
-        <div className="mt-3 rounded-2xl border border-white/10 bg-slate-950/35 p-3">
+        <div className="mt-3 rounded-2xl border border-white/10 bg-[#0d1117]/38 p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.06)]">
           <div className="text-xs font-semibold uppercase text-slate-500">Recommended action</div>
           <div className="mt-1 text-base font-semibold text-slate-50">{final.recommended_action}</div>
         </div>

@@ -95,11 +95,11 @@ export function AIGradingModal({ open, pipeline, error, debugMode, isRunning, on
   const grade = result?.overall_score ?? result?.estimated_grade;
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-center justify-center overflow-y-auto bg-slate-950/72 p-3 backdrop-blur-xl sm:p-6">
-      <div className="relative my-auto w-full max-w-4xl overflow-hidden rounded-[28px] border border-white/15 bg-white/[0.08] shadow-2xl shadow-black/50 ring-1 ring-white/10">
-        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(125,211,252,0.24),transparent_34%),radial-gradient(circle_at_80%_0%,rgba(52,211,153,0.16),transparent_30%)]" />
+    <div className="fixed inset-0 z-[80] flex items-center justify-center overflow-y-auto bg-[#0d1117]/76 p-3 backdrop-blur-2xl sm:p-6">
+      <div className="glass-surface relative my-auto w-full max-w-4xl overflow-hidden rounded-[30px]">
+        <div className="absolute inset-0 bg-[radial-gradient(circle_at_top_left,rgba(103,232,249,0.2),transparent_34%),radial-gradient(circle_at_80%_0%,rgba(167,139,250,0.14),transparent_30%)]" />
         <div className="relative grid max-h-[92vh] gap-5 overflow-y-auto p-4 sm:p-6 lg:grid-cols-[260px_1fr]">
-          <div className="rounded-3xl border border-white/12 bg-slate-950/45 p-5 shadow-xl shadow-cyan-950/20">
+          <div className="glass-card p-5">
             <div className="flex items-center justify-between gap-3">
               <div className="inline-flex items-center gap-2 rounded-full border border-cyan-300/20 bg-cyan-300/10 px-3 py-1 text-xs font-semibold text-cyan-100">
                 <Sparkles size={14} />
@@ -119,7 +119,7 @@ export function AIGradingModal({ open, pipeline, error, debugMode, isRunning, on
               <p className="mt-2 text-sm leading-6 text-slate-300">{statusLabel}</p>
             </div>
             {completed && (
-              <div className="mt-5 rounded-3xl border border-emerald-300/20 bg-emerald-300/10 p-4 text-center">
+              <div className="mt-5 rounded-3xl border border-emerald-300/20 bg-emerald-300/10 p-4 text-center shadow-[0_0_34px_rgba(52,211,153,0.12)]">
                 <div className="text-xs font-semibold uppercase text-emerald-100">Final grade</div>
                 <div className="mt-1 animate-[pulse_1.6s_ease-in-out_1] text-5xl font-semibold text-white">{displayGrade(grade)}</div>
                 <div className="mt-2 text-sm text-emerald-100">Confidence: {displayGrade(result?.confidence)}</div>
@@ -128,7 +128,7 @@ export function AIGradingModal({ open, pipeline, error, debugMode, isRunning, on
           </div>
 
           <div className="grid gap-4">
-            <div className="rounded-3xl border border-white/12 bg-slate-950/38 p-4 sm:p-5">
+            <div className="glass-card p-4 sm:p-5">
               <div className="flex flex-wrap items-center justify-between gap-3">
                 <div>
                   <div className="text-xs font-semibold uppercase text-slate-400">{phase.replace("_", " ")}</div>
@@ -143,7 +143,7 @@ export function AIGradingModal({ open, pipeline, error, debugMode, isRunning, on
               </div>
               <div className="mt-5 grid gap-3 md:grid-cols-2">
                 {(["Phase A", "Phase B"] as const).map((phaseName) => (
-                  <div key={phaseName} className="rounded-2xl border border-white/10 bg-white/[0.04] p-3">
+                  <div key={phaseName} className="rounded-2xl border border-white/10 bg-white/[0.045] p-3 shadow-[inset_0_1px_0_rgba(255,255,255,0.08)]">
                     <div className="mb-3 text-xs font-semibold uppercase text-slate-400">{phaseName}</div>
                     <div className="space-y-3">
                       {timeline.filter((item) => item.phase === phaseName).map((item) => {
@@ -162,7 +162,7 @@ export function AIGradingModal({ open, pipeline, error, debugMode, isRunning, on
             </div>
 
             <div className="grid gap-4 md:grid-cols-2">
-              <div className="rounded-3xl border border-white/12 bg-slate-950/38 p-4">
+              <div className="glass-card p-4">
                 <div className="text-xs font-semibold uppercase text-slate-400">Phase A inputs</div>
                 <div className="mt-3 space-y-2 text-sm text-slate-200">
                   {["Front image", "Back image", "Centering data"].map((item) => (
@@ -170,7 +170,7 @@ export function AIGradingModal({ open, pipeline, error, debugMode, isRunning, on
                   ))}
                 </div>
               </div>
-              <div className="rounded-3xl border border-white/12 bg-slate-950/38 p-4">
+              <div className="glass-card p-4">
                 <div className="text-xs font-semibold uppercase text-slate-400">Phase B inputs</div>
                 <div className="mt-3 space-y-2 text-sm text-slate-200">
                   {["Emboss", "High Pass", "Sobel", "Working Notes"].map((item) => (

@@ -19,25 +19,27 @@ export function Sidebar({ page, debugMode, onNavigate }: SidebarProps) {
   const items = debugMode ? [...baseItems, { page: "debug" as const, label: "Debug tools", icon: Bug }] : baseItems;
 
   return (
-    <aside className="sticky top-0 hidden h-screen w-72 shrink-0 border-r border-white/10 bg-slate-950/72 px-4 py-5 backdrop-blur-2xl lg:block">
-      <div className="mb-7 rounded-2xl border border-white/10 bg-white/[0.045] px-4 py-4">
+    <aside className="sticky top-0 hidden h-screen w-72 shrink-0 border-r border-white/10 bg-[#111722]/72 px-4 py-5 shadow-2xl shadow-black/20 backdrop-blur-2xl lg:block">
+      <div className="glass-card mb-7 px-4 py-4">
         <div className="flex items-center gap-3">
           <BrandLogo className="h-11 w-11 shrink-0" />
           <div className="min-w-0">
-            <div className="text-xs font-semibold uppercase text-blue-300">CardGrader</div>
+            <div className="page-kicker text-xs font-semibold uppercase">CardGrader</div>
             <div className="mt-1 text-sm text-slate-400">Local AI grading desk</div>
           </div>
         </div>
       </div>
-      <nav className="space-y-1.5">
+      <nav className="space-y-2">
         {items.map((item) => {
           const Icon = item.icon;
           const active = page === item.page || (page === "detail" && item.page === "collection");
           return (
             <button
               key={item.page}
-              className={`flex min-h-11 w-full items-center gap-3 rounded-xl px-3 py-2.5 text-left text-sm font-medium transition ${
-                active ? "bg-white text-slate-950 shadow-sm" : "text-slate-400 hover:bg-white/10 hover:text-slate-100"
+              className={`flex min-h-12 w-full items-center gap-3 rounded-2xl px-3.5 py-2.5 text-left text-sm font-medium transition ${
+                active
+                  ? "border border-cyan-200/25 bg-gradient-to-r from-cyan-300/18 via-white/[0.09] to-purple-300/12 text-slate-50 shadow-[0_12px_32px_rgba(0,0,0,0.24),inset_0_1px_0_rgba(255,255,255,0.14)]"
+                  : "border border-transparent text-slate-400 hover:border-white/10 hover:bg-white/[0.07] hover:text-slate-100"
               }`}
               onClick={() => onNavigate(item.page)}
               type="button"
